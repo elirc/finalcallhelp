@@ -35,9 +35,17 @@ export class ClipRecorder {
   ) {}
 
   async start(): Promise<void> {
+    const ensureActive = () => {
+      if (this.stopped) throw new DOMException('Recording cancelled', 'AbortError');
+    };
+    ensureActive();
     // The armed grant in the main process supplies the source; this request
     // never shows a picker and fails closed when unarmed (CAPTURE_DENIED).
     const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    if (this.stopped) {
+      stream.getTracks().forEach((track) => track.stop());
+      ensureActive();
+    }
     for (const track of stream.getVideoTracks()) track.stop();
     const audioTracks = stream.getAudioTracks();
     if (audioTracks.length === 0) {
@@ -48,6 +56,9 @@ export class ClipRecorder {
     this.context = new AudioContext();
     this.sampleRate = this.context.sampleRate;
     await this.context.audioWorklet.addModule('./audio-capture-worklet.js');
+    ensureActive();
+    await this.context.resume();
+    ensureActive();
     const source = this.context.createMediaStreamSource(this.stream);
     this.worklet = new AudioWorkletNode(this.context, 'cuedeck-capture', {
       numberOfInputs: 1,

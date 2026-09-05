@@ -1,5 +1,9 @@
 # CueDeck
 
+**Start here: [Complete Groq free-tier testing walkthrough](README_GROQ_TESTING.md)** —
+account/key setup, every app action, recording tests, profiles, history exports, troubleshooting,
+and manual/automated testing checklists.
+
 CueDeck is a **free, local-first conversation practice and disclosed-assistance coach** for
 Windows. Press **Listen**, let it hear a short clip of this computer's audio (a mock-interview
 question, a permitted call), and it transcribes the clip and streams a concise first-person
@@ -14,6 +18,37 @@ hidden-recording or screen-share-concealment features, and never will. You are r
 participant consent and the rules that apply to your calls. See [PRIVACY.md](PRIVACY.md).
 
 ## Zero mandatory spend
+
+### Quickest way to test
+
+From the parent folder, double-click **Start CueDeck.cmd**, or run:
+
+```powershell
+cd cuedeck
+npm ci
+npm start
+```
+
+After the acknowledgement, choose **Use cloud free tier**. Select **Groq**, open
+**Get Groq API key**, and create a key in your own [Groq account](https://console.groq.com/keys).
+Paste it into CueDeck and click **Save and test**. One key configures both Whisper transcription
+and GPT-OSS responses. This tests an actual short response without sending your profile or audio.
+Use an account on Groq's Free plan; the app cannot determine your provider billing plan.
+
+Continue through the optional audio test and profile. On the Coach, type a question or choose
+**Draw a question**, then **Respond to edited text**. This tests real AI without audio setup.
+To test **Listen**, play spoken audio through your speakers/headphones; it captures computer
+output, not your microphone. No Ollama installation or model downloads are needed with Groq.
+
+For an immediate interface test, choose **Try the demo**. It streams a fixed sample response
+with no key or downloads, and supports copy, cancel, and optional history. It does **not** use
+AI or record audio. **Set up real AI** returns to setup whenever you are ready.
+
+Alternatives: Gemini supports audio and responses with one key. OpenRouter's free router supports
+typed questions immediately; recording additionally needs local Whisper. Cerebras currently offers
+a free trial for responses. See [free testing options](docs/FREE_TESTING.md) for links and limits.
+
+### Fully local option
 
 Local mode is the default and the only mode labeled **Always free**:
 
@@ -30,7 +65,8 @@ Optional **cloud free-tier** adapters (Groq, Cerebras, Google Gemini, OpenRouter
 available for older hardware. They are labeled _free tier; limits may change_, require your own
 API key (stored encrypted with Windows DPAPI — the OS's built-in Data Protection API, which
 encrypts data so only your Windows user account can decrypt it), show each provider's data-use
-policy before use, and are never fallen back to silently. Paid model IDs are rejected by design.
+policy before use, and are never fallen back to silently. Model selection is restricted to the
+supported catalog (and OpenRouter `:free` models), but cloud billing depends on your account plan.
 
 ## Prerequisites
 
@@ -60,7 +96,7 @@ and launches the Electron app pointing at them. The first window is the onboardi
 
 1. **Consent acknowledgement** — you confirm you understand the visible-recording and
    participant-consent rules. Required before anything else works.
-2. **Mode choice** — local (recommended, always free) or cloud free tier.
+2. **Mode choice** — cloud free tier (quickest setup), a no-key interface demo, or fully local.
 3. **Local setup** (local mode) — pick and download a Whisper ONNX model (Tiny ~120 MB /
    Base ~200 MB, recommended / Small ~600 MB) and let the app detect Ollama. Models download
    from Hugging Face into `%APPDATA%\CueDeck\models`. **Cloud setup** (cloud mode) — pick a

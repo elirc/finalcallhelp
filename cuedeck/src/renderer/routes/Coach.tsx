@@ -3,10 +3,12 @@ import { answerStats } from '../../shared/answerStats';
 import type { AnswerMode, PublicError, PublicSettings, TargetSeconds } from '../../shared/domain';
 import { SilenceEndpointer } from '../../shared/endpointing';
 import { publicError } from '../../shared/errors';
+import { setupPreset } from '../../shared/setup';
 import { PRACTICE_CATEGORIES, PracticeDeck, type PracticeCategory } from '../../shared/practice';
 import { ClipRecorder } from '../audio/recorder';
 import { resolveShortcut } from '../state/shortcuts';
 import { coachReducer, initialCoachState, isActivePhase } from '../state/sessionMachine';
+import { useReadiness } from '../state/useReadiness';
 
 interface Props {
   settings: PublicSettings;
@@ -34,11 +36,13 @@ function formatTime(ms: number): string {
 
 export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element {
   const [state, dispatch] = useReducer(coachReducer, initialCoachState);
+  const readiness = useReadiness(settings);
   const recorderRef = useRef<ClipRecorder | null>(null);
   const sessionRef = useRef<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [liveMessage, setLiveMessage] = useState('');
   const [notes, setNotes] = useState('');
+  const [responseTargetSeconds, setResponseTargetSeconds] = useState(settings.targetSeconds);
   const notesRef = useRef('');
   const [practiceCategory, setPracticeCategory] = useState<PracticeCategory | 'all'>('all');
   const deckRef = useRef<PracticeDeck | null>(null);
@@ -74,6 +78,16 @@ export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element
     });
   }, []);
 
+  useEffect(
+    () => () => {
+      const recorder = recorderRef.current;
+      recorderRef.current = null;
+      if (recorder) void recorder.abort();
+      if (sessionRef.current) void window.cuedeck.cancelSession(sessionRef.current);
+    },
+    [],
+  );
+
   const stopRecording = useCallback(async () => {
     const recorder = recorderRef.current;
     const sessionId = sessionRef.current;
@@ -82,6 +96,8 @@ export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element
     dispatch({ type: 'stop-requested' });
     try {
       const clip = await recorder.stop();
+      if (sessionRef.current !== sessionId) return;
+      setResponseTargetSeconds(optionsRef.current.targetSeconds);
       await window.cuedeck.submitSession(
         sessionId,
         clip.wav,
@@ -94,11 +110,13 @@ export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element
       );
       dispatch({ type: 'submitted', sessionId });
     } catch (err) {
+      if (sessionRef.current !== sessionId) return;
       dispatch({ type: 'capture-failed', error: asPublicError(err) });
     }
   }, [settings.sttLanguage]);
 
   const startRecording = useCallback(async () => {
+    if (!readiness.canListen || recorderRef.current) return;
     const sessionId = crypto.randomUUID();
     sessionRef.current = sessionId;
     dispatch({ type: 'arm', sessionId });
@@ -120,14 +138,16 @@ export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element
       dispatch({ type: 'capture-started' });
       setLiveMessage('Recording started.');
     } catch (err) {
-      recorderRef.current = null;
+      if (recorderRef.current === recorder) recorderRef.current = null;
       await recorder.abort();
+      if (sessionRef.current !== sessionId) return;
       dispatch({ type: 'capture-failed', error: asCaptureError(err) });
     }
-  }, [settings.maxClipSeconds, settings.autoStopOnSilence, stopRecording]);
+  }, [settings.maxClipSeconds, settings.autoStopOnSilence, stopRecording, readiness.canListen]);
 
   const cancel = useCallback(async () => {
     const sessionId = sessionRef.current;
+    sessionRef.current = null;
     dispatch({ type: 'cancel-requested' });
     const recorder = recorderRef.current;
     recorderRef.current = null;
@@ -141,16 +161,17 @@ export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element
 
   const regenerate = useCallback(
     async (overrides: Partial<{ answerMode: AnswerMode; targetSeconds: TargetSeconds }> = {}) => {
-      if (!state.transcript.trim()) return;
+      if (!state.transcript.trim() || !readiness.canRespond) return;
       const sessionId = crypto.randomUUID();
       sessionRef.current = sessionId;
       const options = { ...optionsRef.current, ...overrides, sessionNotes: sessionNotesOption() };
+      setResponseTargetSeconds(options.targetSeconds);
       dispatch({ type: 'regenerate', sessionId, transcript: state.transcript });
       await window.cuedeck.regenerate(sessionId, state.transcript, options).catch((err) => {
         dispatch({ type: 'capture-failed', error: asPublicError(err) });
       });
     },
-    [state.transcript],
+    [state.transcript, readiness.canRespond],
   );
 
   const copyAnswer = useCallback(async () => {
@@ -212,17 +233,29 @@ export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element
   const compact = settings.compactMode;
   const showSilenceWarning = isRecording && state.silentSoFar && state.elapsedMs > 3000;
   const stats =
-    state.phase === 'complete' ? answerStats(state.answer, settings.targetSeconds) : null;
+    state.phase === 'complete' ? answerStats(state.answer, responseTargetSeconds) : null;
+  const phaseLabel =
+    state.phase === 'ready'
+      ? readiness.checking
+        ? 'Checking…'
+        : readiness.llmReady
+          ? 'Ready'
+          : 'Setup needed'
+      : (PHASE_LABEL[state.phase] ?? state.phase);
+  const setup = async () => {
+    await window.cuedeck.updatePublicSettings({ onboardingComplete: false });
+    await onSettingsChanged();
+  };
 
   return (
     <div className={`app-shell${compact ? ' compact' : ''}`}>
       <header className="titlebar">
         <span className="brand">CueDeck</span>
         <span
-          className={`status-chip ${state.phase === 'ready' || state.phase === 'complete' ? 'ready' : state.phase === 'failed' ? 'error' : ''}`}
+          className={`status-chip ${(state.phase === 'ready' && readiness.llmReady) || state.phase === 'complete' ? 'ready' : state.phase === 'failed' ? 'error' : ''}`}
           data-testid="phase-chip"
         >
-          {localMode ? 'Local' : 'Cloud'} • {PHASE_LABEL[state.phase] ?? state.phase}
+          {readiness.demo ? 'Demo' : localMode ? 'Local' : 'Cloud'} • {phaseLabel}
         </span>
         {isRecording && (
           <span className="recording-indicator" data-testid="recording-indicator" role="status">
@@ -243,13 +276,69 @@ export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element
       </header>
 
       <main className="coach-body">
+        {readiness.demo ? (
+          <section className="card setup-card" data-testid="demo-banner">
+            <h2>Try CueDeck — no account needed</h2>
+            <p>
+              Demo streams a fixed sample response. It does not use AI or capture audio. Draw a
+              practice question or type one below, then press Respond.
+            </p>
+            <button className="primary" onClick={() => void setup()} disabled={busy}>
+              Set up real AI
+            </button>
+          </section>
+        ) : (
+          !readiness.canListen &&
+          !busy && (
+            <section className="card setup-card" data-testid="readiness-banner" role="status">
+              <h2>
+                {readiness.checking
+                  ? 'Checking your setup…'
+                  : readiness.llmReady
+                    ? 'Ready for typed questions'
+                    : 'Finish your AI setup'}
+              </h2>
+              {!readiness.checking && (
+                <>
+                  <p>
+                    {readiness.llmReady
+                      ? 'Responses are connected. Type or draw a question below. Set up speech-to-text to enable Listen.'
+                      : !settings.llmModelId
+                        ? 'Choose a response model, or connect a free cloud account to start testing.'
+                        : (readiness.llm?.detail ??
+                          `Response provider: ${readiness.llm?.status ?? 'not connected'}.`)}
+                  </p>
+                  {!readiness.sttReady && (
+                    <p className="hint">
+                      Audio: {readiness.stt?.detail ?? readiness.stt?.status ?? 'not configured'}.
+                    </p>
+                  )}
+                  <div className="row">
+                    <button className="primary" onClick={() => void setup()}>
+                      Set up real AI
+                    </button>
+                    <button onClick={readiness.refresh}>Check again</button>
+                    <button
+                      onClick={async () => {
+                        await window.cuedeck.updatePublicSettings(setupPreset('demo'));
+                        await onSettingsChanged();
+                      }}
+                    >
+                      Try demo instead
+                    </button>
+                  </div>
+                </>
+              )}
+            </section>
+          )
+        )}
         <section className="card">
           <div className="capture-row">
             {!isRecording ? (
               <button
                 className="primary"
                 onClick={() => void startRecording()}
-                disabled={busy || state.phase === 'unconfigured'}
+                disabled={busy || !readiness.canListen}
                 data-testid="listen-button"
                 title="Ctrl+L"
               >
@@ -337,16 +426,16 @@ export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element
         {state.error && (
           <div className="error-banner" role="alert" data-testid="error-banner">
             <span>{state.error.message}</span>
-            {state.error.action === 'open-diagnostics' && (
+            {state.error.action && (
               <button className="small" onClick={() => void window.cuedeck.openPreferences()}>
-                Open diagnostics
+                Open settings
               </button>
             )}
-            {state.error.retryable && (
+            {
               <button className="small" onClick={() => dispatch({ type: 'reset' })}>
                 Dismiss
               </button>
-            )}
+            }
           </div>
         )}
 
@@ -358,15 +447,17 @@ export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element
                 <button
                   className="small"
                   onClick={() => void regenerate()}
-                  disabled={!state.transcript.trim() || busy}
+                  disabled={!state.transcript.trim() || busy || !readiness.canRespond}
                   data-testid="regenerate-button"
                 >
-                  Respond to edited text
+                  {readiness.demo ? 'Show sample response' : 'Respond to edited text'}
                 </button>
               </span>
             </h2>
             <textarea
               aria-label="transcript (editable)"
+              placeholder="Type a question here, or draw one from the practice deck."
+              maxLength={40000}
               value={state.transcript}
               onChange={(e) => dispatch({ type: 'edit-transcript', text: e.target.value })}
               disabled={state.phase === 'transcribing' || state.phase === 'generating'}
@@ -391,7 +482,7 @@ export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element
               <button
                 className="small"
                 onClick={() => dispatch({ type: 'reset' })}
-                disabled={!state.answer && !state.transcript}
+                disabled={busy || (!state.answer && !state.transcript)}
                 data-testid="clear-button"
               >
                 Clear
@@ -406,10 +497,10 @@ export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element
             <p className="answer-stats" data-testid="answer-stats">
               ~{stats.seconds} s spoken ({stats.words} words) —{' '}
               {stats.verdict === 'on-target'
-                ? `about right for your ${settings.targetSeconds} s target`
+                ? `about right for your ${responseTargetSeconds} s target`
                 : stats.verdict === 'long'
-                  ? `longer than your ${settings.targetSeconds} s target`
-                  : `shorter than your ${settings.targetSeconds} s target`}
+                  ? `longer than your ${responseTargetSeconds} s target`
+                  : `shorter than your ${responseTargetSeconds} s target`}
             </p>
           )}
           <div className="mode-row" role="group" aria-label="response follow-ups">

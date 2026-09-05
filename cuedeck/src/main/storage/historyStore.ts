@@ -44,8 +44,12 @@ export class HistoryStore {
   }
 
   async list(limit: number, retentionDays: number): Promise<HistoryItem[]> {
-    const items = applyRetention(await this.read(), retentionDays);
-    return items.slice(0, limit);
+    return this.enqueue(async () => {
+      const stored = await this.read();
+      const items = applyRetention(stored, retentionDays);
+      if (items.length !== stored.length) await writeJsonFile(this.filePath, items);
+      return items.slice(0, limit);
+    });
   }
 
   async delete(id: string): Promise<void> {
@@ -60,10 +64,6 @@ export class HistoryStore {
 
   async clear(): Promise<void> {
     await this.enqueue(() => writeJsonFile(this.filePath, []));
-  }
-
-  async exportAll(): Promise<HistoryItem[]> {
-    return this.read();
   }
 }
 

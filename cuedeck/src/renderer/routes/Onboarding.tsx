@@ -1,13 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { ModelSummary, ProviderProbe, PublicSettings } from '../../shared/domain';
 import { ClipRecorder } from '../audio/recorder';
+import { LOCAL_STT_MODELS } from '../../shared/catalog';
+import { errorMessage, setupPreset } from '../../shared/setup';
+import { CloudSetup } from './CloudSetup';
 
 interface Props {
   settings: PublicSettings;
   onSettingsChanged: () => Promise<void>;
 }
 
-type Step = 'consent' | 'mode' | 'local-setup' | 'cloud-setup' | 'audio-test' | 'profile' | 'done';
+type Step = 'consent' | 'mode' | 'local-setup' | 'cloud-setup' | 'audio-test' | 'profile';
 
 /**
  * First-run flow (spec §8.5). The recommended local path never shows an
@@ -20,14 +23,19 @@ export function Onboarding({ settings, onSettingsChanged }: Props): React.JSX.El
   return (
     <div className="app-shell">
       <div className="onboarding" data-testid={`onboarding-${step}`}>
+        {step !== 'consent' && step !== 'mode' && (
+          <button className="small" onClick={() => setStep('mode')}>
+            Back to setup options
+          </button>
+        )}
         {step === 'consent' && (
           <>
             <h1>Welcome to CueDeck</h1>
             <p>
-              CueDeck records short clips of this computer&apos;s audio — only while you hold the
-              Listen control — transcribes them, and drafts a response you could say next. It is
-              built for mock interviews, rehearsal, accessibility support, and calls where recording
-              and AI assistance are disclosed and permitted.
+              CueDeck records short clips of this computer&apos;s audio — after you press the Listen
+              control — transcribes them, and drafts a response you could say next. It is built for
+              mock interviews, rehearsal, accessibility support, and calls where recording and AI
+              assistance are disclosed and permitted.
             </p>
             <p className="warn-banner">
               A visible recording indicator is always shown while capture is active. CueDeck has no
@@ -66,14 +74,18 @@ export function Onboarding({ settings, onSettingsChanged }: Props): React.JSX.El
         {step === 'mode' && (
           <ModeStep
             onLocal={async () => {
-              await window.cuedeck.updatePublicSettings({
-                sttProviderId: 'local-whisper',
-                llmProviderId: 'ollama',
-              });
+              await window.cuedeck.updatePublicSettings(setupPreset('local'));
               await onSettingsChanged();
               setStep('local-setup');
             }}
             onCloud={() => setStep('cloud-setup')}
+            onDemo={async () => {
+              await window.cuedeck.updatePublicSettings({
+                ...setupPreset('demo'),
+                onboardingComplete: true,
+              });
+              await onSettingsChanged();
+            }}
           />
         )}
 
@@ -86,7 +98,8 @@ export function Onboarding({ settings, onSettingsChanged }: Props): React.JSX.El
         )}
 
         {step === 'cloud-setup' && (
-          <CloudSetupStep
+          <CloudSetup
+            settings={settings}
             onSettingsChanged={onSettingsChanged}
             onNext={() => setStep('audio-test')}
           />
@@ -111,32 +124,45 @@ export function Onboarding({ settings, onSettingsChanged }: Props): React.JSX.El
 function ModeStep({
   onLocal,
   onCloud,
+  onDemo,
 }: {
   onLocal: () => Promise<void>;
   onCloud: () => void;
+  onDemo: () => Promise<void>;
 }): React.JSX.Element {
   return (
     <>
-      <h1>Choose how CueDeck processes audio</h1>
+      <h1>Start testing CueDeck</h1>
+      <p>Choose real AI with a free account, or try the interface now with sample responses.</p>
       <section className="card">
-        <h2>Local — always free, private (recommended)</h2>
+        <h2>Cloud free tier: quickest way to real AI</h2>
+        <p>
+          Audio and transcripts are sent to a provider you choose (Groq, Google Gemini, or
+          OpenRouter) using their free tiers. Quotas are limited and may change, and providers may
+          use free-tier content per their policies. You can switch to local-only at any time.
+        </p>
+        <button className="primary" onClick={onCloud} data-testid="choose-cloud">
+          Use cloud free tier
+        </button>
+      </section>
+      <section className="card">
+        <h2>Demo: no key, no downloads</h2>
+        <p>
+          Try practice questions, streaming, copy, and cancellation with a fixed sample response.
+          Demo does not use AI or record audio.
+        </p>
+        <button onClick={() => void onDemo()} data-testid="choose-demo">
+          Try the demo
+        </button>
+      </section>
+      <section className="card">
+        <h2>Local: always free, private</h2>
         <p>
           Transcription and responses run entirely on this computer using a downloaded Whisper model
           and Ollama. Nothing is sent to any server. No account, key, or payment.
         </p>
         <button className="primary" onClick={() => void onLocal()} data-testid="choose-local">
           Use local mode
-        </button>
-      </section>
-      <section className="card">
-        <h2>Cloud free tier — easier on older computers</h2>
-        <p>
-          Audio and transcripts are sent to a provider you choose (Groq, Google Gemini, or
-          OpenRouter) using their free tiers. Quotas are limited and may change, and providers may
-          use free-tier content per their policies. You can switch to local-only at any time.
-        </p>
-        <button onClick={onCloud} data-testid="choose-cloud">
-          Use cloud free tier
         </button>
       </section>
     </>
@@ -162,13 +188,17 @@ function LocalSetupStep({
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const probeAll = async () => {
-    setSttProbe(await window.cuedeck.probeProvider('local-whisper').catch(() => null));
-    setOllamaProbe(await window.cuedeck.probeProvider('ollama').catch(() => null));
+    const [stt, ollama] = await Promise.all([
+      window.cuedeck.probeProvider('local-whisper'),
+      window.cuedeck.probeProvider('ollama'),
+    ]);
+    setSttProbe(stt);
+    setOllamaProbe(ollama);
   };
 
   useEffect(() => {
     void probeAll();
-  }, []);
+  }, [settings.sttModelId]);
 
   useEffect(() => {
     return window.cuedeck.onOperationEvent((event) => {
@@ -191,19 +221,52 @@ function LocalSetupStep({
 
   const startDownload = async () => {
     setDownloadError(null);
-    const { operationId } = await window.cuedeck.downloadModel(settings.sttModelId);
+    const operationId = crypto.randomUUID();
     setDownloadState({ operationId });
+    try {
+      await window.cuedeck.downloadModel(settings.sttModelId, operationId);
+    } catch (err) {
+      setDownloadState(null);
+      setDownloadError(errorMessage(err));
+    }
   };
 
   const model = sttProbe?.models?.find((m: ModelSummary) => m.id === settings.sttModelId);
   const sttReady = sttProbe?.status === 'ready';
   const ollamaReady = ollamaProbe?.status === 'ready';
 
+  useEffect(() => {
+    const installed = ollamaProbe?.models ?? [];
+    if (installed.length && !settings.llmModelId) {
+      void window.cuedeck
+        .updatePublicSettings({ llmModelId: installed[0].id })
+        .then(onSettingsChanged);
+    }
+  }, [ollamaProbe, settings.llmModelId]);
+
   return (
     <>
       <h1>Set up local mode</h1>
       <section className="card">
         <h2>1. Speech-to-text model</h2>
+        <label className="field">
+          <span>Whisper model</span>
+          <select
+            disabled={!!downloadState}
+            value={settings.sttModelId}
+            onChange={async (e) => {
+              setSttProbe(null);
+              await window.cuedeck.updatePublicSettings({ sttModelId: e.target.value });
+              await onSettingsChanged();
+            }}
+          >
+            {LOCAL_STT_MODELS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.displayName}
+              </option>
+            ))}
+          </select>
+        </label>
         <p>
           {settings.sttModelId} — about{' '}
           {(model?.sizeBytes ? model.sizeBytes / 1e6 : 200).toFixed(0)} MB,{' '}
@@ -282,111 +345,23 @@ function LocalSetupStep({
       <button
         className="primary"
         onClick={onNext}
-        disabled={!sttReady}
+        disabled={
+          !sttReady ||
+          !ollamaReady ||
+          !ollamaProbe?.models?.some((m) => m.id === settings.llmModelId)
+        }
         data-testid="local-setup-next"
       >
         Continue
       </button>
       <p className="warn-banner">
-        You can continue without Ollama — transcription will work and you can copy the transcript —
-        but response generation stays unavailable until a local model server is configured.
+        Listen needs both models. Typed questions only need a response model. You can also go back
+        and choose the demo or free cloud setup.
       </p>
-      {!sttReady && (
+      {(!sttReady || !ollamaReady || !settings.llmModelId) && (
         <button onClick={onNext} className="small">
-          Skip for now
+          Continue to Coach with setup incomplete
         </button>
-      )}
-    </>
-  );
-}
-
-function CloudSetupStep({
-  onSettingsChanged,
-  onNext,
-}: {
-  onSettingsChanged: () => Promise<void>;
-  onNext: () => void;
-}): React.JSX.Element {
-  const [provider, setProvider] = useState<'groq' | 'gemini' | 'openrouter'>('groq');
-  const [key, setKey] = useState('');
-  const [probe, setProbe] = useState<ProviderProbe | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  const disclosures: Record<string, string> = {
-    groq: 'Audio clips and transcripts will be sent to Groq. Free-plan quotas apply and may change.',
-    gemini:
-      'Audio and transcripts will be sent to Google. Content submitted on the Gemini API free tier may be used to improve Google products.',
-    openrouter:
-      'Transcripts are routed to third-party hosts chosen by OpenRouter (about 50 free requests/day). Speech-to-text stays local.',
-  };
-
-  const apply = async () => {
-    setSaving(true);
-    try {
-      await window.cuedeck.setSecret(provider, key);
-      if (provider === 'groq') {
-        await window.cuedeck.updatePublicSettings({
-          sttProviderId: 'groq-whisper',
-          sttModelId: 'whisper-large-v3-turbo',
-          llmProviderId: 'groq',
-          llmModelId: 'llama-3.1-8b-instant',
-        });
-      } else if (provider === 'gemini') {
-        await window.cuedeck.updatePublicSettings({
-          sttProviderId: 'gemini-audio',
-          sttModelId: 'gemini-2.5-flash',
-          llmProviderId: 'gemini',
-          llmModelId: 'gemini-2.5-flash',
-        });
-      } else {
-        await window.cuedeck.updatePublicSettings({
-          llmProviderId: 'openrouter',
-          llmModelId: 'openrouter/free',
-        });
-      }
-      await onSettingsChanged();
-      const result = await window.cuedeck.probeProvider(provider === 'groq' ? 'groq' : provider);
-      setProbe(result);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <>
-      <h1>Cloud free tier</h1>
-      <label className="field">
-        <span>Provider</span>
-        <select value={provider} onChange={(e) => setProvider(e.target.value as typeof provider)}>
-          <option value="groq">Groq (fast; audio + responses)</option>
-          <option value="gemini">Google Gemini (audio + responses)</option>
-          <option value="openrouter">OpenRouter (responses only; local audio)</option>
-        </select>
-      </label>
-      <p className="warn-banner">{disclosures[provider]}</p>
-      <label className="field">
-        <span>API key (stored encrypted with Windows account protection; removable any time)</span>
-        <input
-          type="password"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          autoComplete="off"
-        />
-      </label>
-      <div className="row">
-        <button className="primary" onClick={() => void apply()} disabled={!key || saving}>
-          Save and test
-        </button>
-        <button onClick={onNext} disabled={probe?.status !== 'ready'}>
-          Continue
-        </button>
-      </div>
-      {probe && (
-        <p role="status">
-          {probe.status === 'ready'
-            ? '✓ Provider is reachable.'
-            : `Provider check: ${probe.status} ${probe.detail ?? ''}`}
-        </p>
       )}
     </>
   );
@@ -398,6 +373,15 @@ function AudioTestStep({ onNext }: { onNext: () => void }): React.JSX.Element {
   const [result, setResult] = useState<'healthy' | 'silent' | 'failed' | null>(null);
   const recorderRef = useRef<ClipRecorder | null>(null);
   const peakRef = useRef(0);
+
+  useEffect(
+    () => () => {
+      const recorder = recorderRef.current;
+      recorderRef.current = null;
+      if (recorder) void recorder.abort();
+    },
+    [],
+  );
 
   const runTest = async () => {
     setResult(null);
@@ -451,7 +435,9 @@ function AudioTestStep({ onNext }: { onNext: () => void }): React.JSX.Element {
         <button className="primary" onClick={() => void runTest()} disabled={running}>
           {running ? 'Listening…' : 'Run 5-second test'}
         </button>
-        <button onClick={onNext}>{result === 'healthy' ? 'Continue' : 'Skip test'}</button>
+        <button onClick={onNext} disabled={running}>
+          {result === 'healthy' ? 'Continue' : 'Skip test'}
+        </button>
       </div>
       {result === 'healthy' && <p role="status">✓ System audio is healthy.</p>}
       {result === 'silent' && (
@@ -490,15 +476,25 @@ function ProfileStep({
       </p>
       <label className="field">
         <span>Profile name</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} />
+        <input maxLength={120} value={name} onChange={(e) => setName(e.target.value)} />
       </label>
       <label className="field">
         <span>Your background / resume summary ({summary.length} characters)</span>
-        <textarea rows={6} value={summary} onChange={(e) => setSummary(e.target.value)} />
+        <textarea
+          maxLength={20000}
+          rows={6}
+          value={summary}
+          onChange={(e) => setSummary(e.target.value)}
+        />
       </label>
       <label className="field">
         <span>Role or call context (job description, account, meeting goal)</span>
-        <textarea rows={4} value={roleContext} onChange={(e) => setRoleContext(e.target.value)} />
+        <textarea
+          maxLength={20000}
+          rows={4}
+          value={roleContext}
+          onChange={(e) => setRoleContext(e.target.value)}
+        />
       </label>
       <div className="row">
         <button

@@ -1,6 +1,12 @@
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { randomUUID } from 'node:crypto';
-import type { AppCapabilities, OperationEvent, SessionEvent } from '../../shared/domain';
+import type {
+  AppCapabilities,
+  OperationEvent,
+  PublicSettings,
+  SessionEvent,
+} from '../../shared/domain';
+import { LOCAL_STT_MODELS, PROVIDERS } from '../../shared/catalog';
 import {
   captureArmSchema,
   diagnosticsExportSchema,
@@ -45,8 +51,8 @@ export interface AppServices {
   sttWorkers: SttWorkerManager;
   capabilities: () => AppCapabilities;
   broadcast: (
-    channel: 'session:event' | 'operation:event',
-    payload: SessionEvent | OperationEvent,
+    channel: 'session:event' | 'operation:event' | 'settings:changed',
+    payload: SessionEvent | OperationEvent | PublicSettings,
   ) => void;
   openPreferencesWindow: () => void;
   applyWindowSettings: () => Promise<void>;
@@ -101,6 +107,7 @@ export function registerIpc(services: AppServices): void {
   secureHandle('settings:updatePublic', async (_event, patch) => {
     const updated = await services.settings.patch(patch);
     await services.applyWindowSettings();
+    services.broadcast('settings:changed', updated);
     return updated;
   });
 
@@ -108,15 +115,23 @@ export function registerIpc(services: AppServices): void {
 
   secureHandle('secrets:set', async (_event, raw) => {
     const { providerId, value } = secretsSetSchema.parse(raw);
-    await services.secrets.set(providerId, value);
-    await services.settings.setCredentialFlag(providerId, true);
+    if (PROVIDERS[providerId]?.location !== 'cloud' || !value.trim())
+      throw new CoachError('CREDENTIAL_MISSING');
+    await services.secrets.set(providerId, value.trim());
+    services.broadcast(
+      'settings:changed',
+      await services.settings.setCredentialFlag(providerId, true),
+    );
     return { hasCredential: true };
   });
 
   secureHandle('secrets:remove', async (_event, raw) => {
     const { providerId } = secretsRemoveSchema.parse(raw);
     await services.secrets.remove(providerId);
-    await services.settings.setCredentialFlag(providerId, false);
+    services.broadcast(
+      'settings:changed',
+      await services.settings.setCredentialFlag(providerId, false),
+    );
     return { hasCredential: false };
   });
 
@@ -130,6 +145,37 @@ export function registerIpc(services: AppServices): void {
     return provider.probe(AbortSignal.timeout(TIMEOUTS.probe));
   });
 
+  secureHandle('providers:testResponse', async (_event, raw) => {
+    const { providerId } = providersProbeSchema.parse(raw);
+    const provider = services.registry.getLlm(providerId);
+    const settings = await services.settings.get();
+    if (settings.llmProviderId !== providerId)
+      throw new CoachError('PROVIDER_UNAVAILABLE', 'Select this provider first.');
+    const controller = new AbortController();
+    const started = Date.now();
+    try {
+      for await (const delta of provider.generate({
+        modelId: settings.llmModelId,
+        system: 'Reply with exactly the word Ready.',
+        user: 'Connection test.',
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(TIMEOUTS.llmFirstToken)]),
+      })) {
+        if (delta.text.trim())
+          return { providerId, status: 'ready', latencyMs: Date.now() - started };
+      }
+      throw new CoachError('PROVIDER_UNAVAILABLE', 'The provider returned an empty sample.');
+    } catch (err) {
+      const error = toPublicError(err);
+      return {
+        providerId,
+        status: error.code === 'PROVIDER_RATE_LIMITED' ? 'quota-limited' : 'unknown-failure',
+        detail: error.message,
+      };
+    } finally {
+      controller.abort();
+    }
+  });
+
   secureHandle('models:list', async (_event, raw) => {
     const { providerId } = modelsListSchema.parse(raw);
     const provider = services.registry.getAny(providerId);
@@ -137,8 +183,11 @@ export function registerIpc(services: AppServices): void {
   });
 
   secureHandle('models:download', (_event, raw) => {
-    const { modelId } = modelsDownloadSchema.parse(raw);
-    const operationId = randomUUID();
+    const { modelId, operationId = randomUUID() } = modelsDownloadSchema.parse(raw);
+    if (!LOCAL_STT_MODELS.some((model) => model.id === modelId))
+      throw new CoachError('MODEL_NOT_INSTALLED', 'Choose a model from the local model catalog.');
+    if (downloadOperations.size)
+      throw new CoachError('PROVIDER_UNAVAILABLE', 'A model download is already running.');
     const controller = new AbortController();
     downloadOperations.set(operationId, controller);
     void services.sttWorkers
@@ -235,7 +284,11 @@ export function registerIpc(services: AppServices): void {
     return { cleared: true };
   });
 
-  secureHandle('history:export', async () => services.history.exportAll());
+  secureHandle('history:export', async () => {
+    const settings = await services.settings.get();
+    if (!settings.historyEnabled) return [];
+    return services.history.list(Number.MAX_SAFE_INTEGER, settings.historyRetentionDays);
+  });
 
   // ---- profiles ------------------------------------------------------------------
 
@@ -249,6 +302,13 @@ export function registerIpc(services: AppServices): void {
   secureHandle('profiles:delete', async (_event, raw) => {
     const { id } = profileDeleteSchema.parse(raw);
     await services.profiles.delete(id);
+    const settings = await services.settings.get();
+    if (settings.activeProfileId === id) {
+      services.broadcast(
+        'settings:changed',
+        await services.settings.patch({ activeProfileId: undefined }),
+      );
+    }
     return { deleted: true };
   });
 

@@ -10,6 +10,7 @@ export class GroqLlmProvider extends OpenAiCompatibleLlmProvider {
         meta: PROVIDERS.groq,
         baseUrl,
         providerName: 'Groq',
+        extraBody: { reasoning_effort: 'low' },
         models: [
           {
             id: CLOUD_MODELS.groqLlmModel,

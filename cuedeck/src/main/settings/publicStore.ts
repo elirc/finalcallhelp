@@ -3,6 +3,8 @@ import type { PublicSettings } from '../../shared/domain';
 import { publicSettingsPatchSchema } from '../../shared/schemas';
 import { readJsonFile, writeJsonFile } from '../storage/jsonFile';
 import { migrateSettings } from './migrations';
+import { DEFAULT_PROVIDER_MODELS } from '../../shared/catalog';
+import { validateProviderSettings } from './providerSettings';
 
 /**
  * Public (non-secret) settings. Credential *values* never live here — only
@@ -11,7 +13,8 @@ import { migrateSettings } from './migrations';
 export class PublicSettingsStore {
   private readonly filePath: string;
   private cache: PublicSettings | null = null;
-  private writeChain: Promise<void> = Promise.resolve();
+  private loading: Promise<PublicSettings> | null = null;
+  private writeChain: Promise<unknown> = Promise.resolve();
 
   constructor(userDataDir: string) {
     this.filePath = path.join(userDataDir, 'settings.json');
@@ -19,9 +22,13 @@ export class PublicSettingsStore {
 
   async load(): Promise<PublicSettings> {
     if (this.cache) return this.cache;
-    const raw = await readJsonFile(this.filePath).catch(() => null);
-    this.cache = migrateSettings(raw);
-    return this.cache;
+    this.loading ??= readJsonFile(this.filePath)
+      .catch(() => null)
+      .then((raw) => {
+        this.cache = migrateSettings(raw);
+        return this.cache;
+      });
+    return this.loading;
   }
 
   async get(): Promise<PublicSettings> {
@@ -30,29 +37,42 @@ export class PublicSettingsStore {
 
   async patch(rawPatch: unknown): Promise<PublicSettings> {
     const patch = publicSettingsPatchSchema.parse(rawPatch);
-    const current = await this.load();
-    const next: PublicSettings = { ...current, ...patch };
-    return this.replace(next);
+    return this.mutate((current) => {
+      const next: PublicSettings = { ...current, ...patch };
+      if (patch.sttProviderId && patch.sttProviderId !== current.sttProviderId && !patch.sttModelId)
+        next.sttModelId = DEFAULT_PROVIDER_MODELS[patch.sttProviderId];
+      if (patch.llmProviderId && patch.llmProviderId !== current.llmProviderId && !patch.llmModelId)
+        next.llmModelId = DEFAULT_PROVIDER_MODELS[patch.llmProviderId];
+      validateProviderSettings(next);
+      return next;
+    });
   }
 
   /** Internal-only writes (e.g. credential flags); bypasses the renderer patch schema. */
   async replace(next: PublicSettings): Promise<PublicSettings> {
-    this.cache = next;
-    // Chain writes so they reach disk in order, but never let a failed write
-    // poison the chain — that would reject every future write unattempted.
+    return this.mutate(() => next);
+  }
+
+  /** Serialize read/modify/write, including cache updates, across both windows. */
+  private mutate(update: (current: PublicSettings) => PublicSettings): Promise<PublicSettings> {
     const write = this.writeChain
       .catch(() => undefined)
-      .then(() => writeJsonFile(this.filePath, next));
-    this.writeChain = write.catch(() => undefined);
-    await write;
-    return next;
+      .then(async () => {
+        const next = update(await this.load());
+        await writeJsonFile(this.filePath, next);
+        this.cache = next;
+        return next;
+      });
+    this.writeChain = write;
+    return write;
   }
 
   async setCredentialFlag(providerId: string, configured: boolean): Promise<PublicSettings> {
-    const current = await this.load();
-    const credentials = { ...current.credentials };
-    if (configured) credentials[providerId] = { configured: true };
-    else delete credentials[providerId];
-    return this.replace({ ...current, credentials });
+    return this.mutate((current) => {
+      const credentials = { ...current.credentials };
+      if (configured) credentials[providerId] = { configured: true };
+      else delete credentials[providerId];
+      return { ...current, credentials };
+    });
   }
 }

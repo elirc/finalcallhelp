@@ -308,6 +308,11 @@ export class SessionCoordinator {
     if (!this.isCurrent(context)) return;
 
     const answer = capText(context.answer, ANSWER_CHAR_CAP);
+    if (!answer.trim())
+      throw new CoachError(
+        'PROVIDER_UNAVAILABLE',
+        'The model returned an empty response. Try again or choose another provider.',
+      );
     const metrics: SessionMetrics = {
       encodeMs: timing.encodeMs,
       transcribeMs: timing.transcribeMs,

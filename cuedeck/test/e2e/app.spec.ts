@@ -197,7 +197,7 @@ test.describe('coach workflow', () => {
       await expect(page.getByTestId('error-banner')).toContainText(/Ollama|unavailable|reached/i);
       // Dismiss recovers to ready.
       await page.getByRole('button', { name: 'Dismiss' }).click();
-      await expect(page.getByTestId('phase-chip')).toContainText('Ready');
+      await expect(page.getByTestId('phase-chip')).toContainText('Setup needed');
     } finally {
       await app.close();
     }

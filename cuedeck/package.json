@@ -6,8 +6,8 @@
   "main": ".vite/build/main.js",
   "private": true,
   "scripts": {
-    "dev": "electron-forge start",
-    "start": "electron-forge start",
+    "dev": "node scripts/start.mjs",
+    "start": "node scripts/start.mjs",
     "build": "vite build --config vite.main.config.ts && vite build --config vite.preload.config.ts && vite build --config vite.worker.config.ts && vite build --config vite.renderer.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test *.ts",

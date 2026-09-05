@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -10,6 +10,7 @@ import { applyRetention, HistoryStore } from '../../src/main/storage/historyStor
 import { ProfileStore } from '../../src/main/storage/profileStore';
 import { DEFAULT_SETTINGS } from '../../src/shared/constants';
 import type { HistoryItem } from '../../src/shared/domain';
+import { CLOUD_MODELS } from '../../src/shared/catalog';
 
 let dir: string;
 beforeEach(() => {
@@ -59,6 +60,51 @@ describe('migrateSettings', () => {
 });
 
 describe('PublicSettingsStore', () => {
+  it('preserves concurrent changes from both windows and the secret vault', async () => {
+    const store = new PublicSettingsStore(dir);
+    await Promise.all([
+      store.patch({ alwaysOnTop: true }),
+      store.patch({ fontScale: 1.3 }),
+      store.setCredentialFlag('groq', true),
+    ]);
+    const saved = await new PublicSettingsStore(dir).get();
+    expect(saved.alwaysOnTop).toBe(true);
+    expect(saved.fontScale).toBe(1.3);
+    expect(saved.credentials.groq.configured).toBe(true);
+  });
+
+  it('changes model defaults together with providers', async () => {
+    const store = new PublicSettingsStore(dir);
+    const saved = await store.patch({
+      llmProviderId: 'groq',
+      llmModelId: '',
+      sttProviderId: 'groq-whisper',
+    });
+    expect(saved.llmModelId).toBe(CLOUD_MODELS.groqLlmModel);
+    expect(saved.sttModelId).toBe(CLOUD_MODELS.groqSttModel);
+  });
+
+  it('rejects unsupported models and remote local-server addresses without poisoning writes', async () => {
+    const store = new PublicSettingsStore(dir);
+    await expect(
+      store.patch({ llmProviderId: 'openrouter', llmModelId: 'paid/model' }),
+    ).rejects.toThrow();
+    await expect(store.patch({ sttModelId: '../../outside' })).rejects.toThrow();
+    await expect(store.patch({ ollamaBaseUrl: 'https://example.com' })).rejects.toThrow();
+    await store.patch({ alwaysOnTop: true });
+    expect((await store.get()).alwaysOnTop).toBe(true);
+  });
+
+  it('migrates retired cloud model IDs without losing user preferences', () => {
+    const saved = migrateSettings({
+      ...DEFAULT_SETTINGS,
+      llmProviderId: 'cerebras',
+      llmModelId: 'llama3.1-8b',
+      alwaysOnTop: true,
+    });
+    expect(saved.llmModelId).toBe(CLOUD_MODELS.cerebrasModel);
+    expect(saved.alwaysOnTop).toBe(true);
+  });
   it('persists patches and enforces the patch schema', async () => {
     const store = new PublicSettingsStore(dir);
     await store.patch({ alwaysOnTop: true });
@@ -77,6 +123,17 @@ describe('PublicSettingsStore', () => {
 });
 
 describe('SecretVault', () => {
+  it('preserves other account keys during concurrent saves and removal', async () => {
+    const vault = new SecretVault(dir, fakeSafeStorage);
+    await Promise.all([vault.set('groq', 'groq-fixture'), vault.set('gemini', 'gemini-fixture')]);
+    expect(await vault.getForAdapter('groq')).toBe('groq-fixture');
+    expect(await vault.getForAdapter('gemini')).toBe('gemini-fixture');
+    await Promise.all([vault.remove('groq'), vault.set('cerebras', 'cerebras-fixture')]);
+    expect(await vault.has('groq')).toBe(false);
+    expect(await vault.getForAdapter('gemini')).toBe('gemini-fixture');
+    expect(await vault.getForAdapter('cerebras')).toBe('cerebras-fixture');
+  });
+
   it('stores only ciphertext on disk and returns values to adapters only', async () => {
     const vault = new SecretVault(dir, fakeSafeStorage);
     await vault.set('groq', 'gsk_super_secret_value');
@@ -128,6 +185,23 @@ describe('HistoryStore', () => {
     expect(await store.list(10, 7)).toHaveLength(1);
     await store.clear();
     expect(await store.list(10, 7)).toHaveLength(0);
+  });
+
+  it('removes expired history from disk when read, including session-only retention', async () => {
+    const store = new HistoryStore(dir);
+    await store.add(item, 30);
+    const saved = (await store.list(10, 30))[0];
+    await writeFile(
+      path.join(dir, 'history.json'),
+      JSON.stringify([
+        saved,
+        { ...saved, id: 'expired', createdAt: new Date(Date.now() - 4 * 86400000).toISOString() },
+      ]),
+    );
+    expect(await store.list(10, 1)).toHaveLength(1);
+    expect(JSON.parse(await readFile(path.join(dir, 'history.json'), 'utf8'))).toHaveLength(1);
+    expect(await store.list(10, 0)).toEqual([]);
+    expect(JSON.parse(await readFile(path.join(dir, 'history.json'), 'utf8'))).toEqual([]);
   });
 });
 

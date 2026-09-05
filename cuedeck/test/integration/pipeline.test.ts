@@ -75,6 +75,20 @@ function makeHarness(overrides: {
 }
 
 describe('session pipeline', () => {
+  it('does not mark an empty response as a successful session or save it in history', async () => {
+    const { coordinator, events, history } = makeHarness({
+      historyEnabled: true,
+      generate: async function* () {
+        yield { text: '   ', sequence: 0 };
+      },
+    });
+    await coordinator.regenerate(SID, 'Question?', OPTIONS);
+    expect(events.some((event) => event.type === 'answer-complete')).toBe(false);
+    expect(events.find((event) => event.type === 'error')).toMatchObject({
+      error: { code: 'PROVIDER_UNAVAILABLE' },
+    });
+    expect(history).toHaveLength(0);
+  });
   it('runs WAV -> transcript -> ordered deltas -> complete', async () => {
     const { coordinator, events } = makeHarness({});
     await coordinator.submit(SID, sineWav(2), OPTIONS, 5);

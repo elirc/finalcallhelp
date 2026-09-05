@@ -9,6 +9,10 @@ import type {
   PublicSettings,
 } from '../../shared/domain';
 import { filterHistory } from '../../shared/historySearch';
+import { DEFAULT_PROVIDER_MODELS } from '../../shared/catalog';
+import { setupPreset } from '../../shared/setup';
+import { errorMessage } from '../../shared/setup';
+import { CloudSetup } from './CloudSetup';
 
 interface Props {
   settings: PublicSettings;
@@ -67,10 +71,18 @@ export function Preferences({ settings, onSettingsChanged }: Props): React.JSX.E
   );
 }
 
-function GeneralSection({ settings, onSettingsChanged }: Props): React.JSX.Element {
+function GeneralSection({ settings: savedSettings, onSettingsChanged }: Props): React.JSX.Element {
+  const [settings, setSettings] = useState(savedSettings);
+  useEffect(() => setSettings(savedSettings), [savedSettings]);
   const update = async (patch: Partial<PublicSettings>) => {
-    await window.cuedeck.updatePublicSettings(patch);
-    await onSettingsChanged();
+    setSettings((current) => ({ ...current, ...patch }));
+    try {
+      await window.cuedeck.updatePublicSettings(patch);
+      await onSettingsChanged();
+    } catch (err) {
+      setSettings(savedSettings);
+      throw err;
+    }
   };
   return (
     <>
@@ -155,11 +167,19 @@ function ProvidersSection({ settings, onSettingsChanged }: Props): React.JSX.Ele
   const [models, setModels] = useState<Record<string, ModelSummary[]>>({});
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
   const [ollamaUrl, setOllamaUrl] = useState(settings.ollamaBaseUrl);
-  const [ollamaConfirm, setOllamaConfirm] = useState(false);
 
   useEffect(() => {
     void window.cuedeck.listProviders().then(setProviders);
   }, []);
+
+  useEffect(() => {
+    void window.cuedeck
+      .listModels(settings.llmProviderId)
+      .then((list) => {
+        setModels((current) => ({ ...current, [settings.llmProviderId]: list }));
+      })
+      .catch(() => undefined);
+  }, [settings.llmProviderId, settings.ollamaBaseUrl]);
 
   const update = async (patch: Partial<PublicSettings>) => {
     await window.cuedeck.updatePublicSettings(patch);
@@ -191,7 +211,6 @@ function ProvidersSection({ settings, onSettingsChanged }: Props): React.JSX.Ele
   const cloudProviders = [
     ...new Set(providers.filter((p) => p.location === 'cloud').map((p) => p.credentialId ?? p.id)),
   ];
-  const ollamaIsRemote = !/^https?:\/\/(localhost|127\.|\[::1\])/.test(ollamaUrl);
 
   const providerStatus = (id: string) => {
     const p = probes[id];
@@ -208,6 +227,7 @@ function ProvidersSection({ settings, onSettingsChanged }: Props): React.JSX.Ele
   return (
     <>
       <h1>Providers</h1>
+      <CloudSetup settings={settings} onSettingsChanged={onSettingsChanged} />
       <section className="card">
         <h2>Processing summary</h2>
         <p>
@@ -221,10 +241,7 @@ function ProvidersSection({ settings, onSettingsChanged }: Props): React.JSX.Ele
           transcript, your active profile, role context, and session notes. Nothing else — no
           history, no other profiles, no screen content.
         </p>
-        <button
-          className="small"
-          onClick={() => void update({ sttProviderId: 'local-whisper', llmProviderId: 'ollama' })}
-        >
+        <button className="small" onClick={() => void update(setupPreset('local'))}>
           Switch everything to local-only
         </button>
       </section>
@@ -235,7 +252,12 @@ function ProvidersSection({ settings, onSettingsChanged }: Props): React.JSX.Ele
           <span>Provider</span>
           <select
             value={settings.sttProviderId}
-            onChange={(e) => void update({ sttProviderId: e.target.value })}
+            onChange={(e) =>
+              void update({
+                sttProviderId: e.target.value,
+                sttModelId: DEFAULT_PROVIDER_MODELS[e.target.value],
+              })
+            }
           >
             {sttProviders.map((p) => (
               <option
@@ -276,7 +298,12 @@ function ProvidersSection({ settings, onSettingsChanged }: Props): React.JSX.Ele
           <span>Provider</span>
           <select
             value={settings.llmProviderId}
-            onChange={(e) => void update({ llmProviderId: e.target.value, llmModelId: '' })}
+            onChange={(e) =>
+              void update({
+                llmProviderId: e.target.value,
+                llmModelId: DEFAULT_PROVIDER_MODELS[e.target.value],
+              })
+            }
           >
             {llmProviders.map((p) => (
               <option
@@ -329,25 +356,11 @@ function ProvidersSection({ settings, onSettingsChanged }: Props): React.JSX.Ele
               <span>Base URL (default http://127.0.0.1:11434)</span>
               <input value={ollamaUrl} onChange={(e) => setOllamaUrl(e.target.value)} />
             </label>
-            {ollamaIsRemote && (
-              <label className="row warn-banner">
-                <input
-                  type="checkbox"
-                  style={{ width: 'auto' }}
-                  checked={ollamaConfirm}
-                  onChange={(e) => setOllamaConfirm(e.target.checked)}
-                />
-                <span>
-                  This is not a local address. Prompts, transcripts, and profile data will leave
-                  this device. I understand.
-                </span>
-              </label>
-            )}
-            <button
-              className="small"
-              disabled={ollamaIsRemote && !ollamaConfirm}
-              onClick={() => void update({ ollamaBaseUrl: ollamaUrl })}
-            >
+            <p className="hint">
+              Use a loopback address (localhost, 127.0.0.1, or ::1). Remote Ollama servers are not
+              supported.
+            </p>
+            <button className="small" onClick={() => void update({ ollamaBaseUrl: ollamaUrl })}>
               Save server address
             </button>
           </details>
@@ -477,6 +490,7 @@ function LocalModelPicker({
         <span>Local model (downloaded on demand; stored in app data)</span>
         <select
           value={settings.sttModelId}
+          disabled={!!download}
           onChange={async (e) => {
             await window.cuedeck.updatePublicSettings({ sttModelId: e.target.value });
             await onSettingsChanged();
@@ -507,8 +521,14 @@ function LocalModelPicker({
           className="small"
           onClick={async () => {
             setMessage(null);
-            const { operationId } = await window.cuedeck.downloadModel(settings.sttModelId);
+            const operationId = crypto.randomUUID();
             setDownload({ operationId });
+            try {
+              await window.cuedeck.downloadModel(settings.sttModelId, operationId);
+            } catch (err) {
+              setDownload(null);
+              setMessage(errorMessage(err));
+            }
           }}
         >
           Download / verify selected model
@@ -652,7 +672,7 @@ function HistorySection({ settings, onSettingsChanged }: Props): React.JSX.Eleme
   const refresh = async () => setItems(await window.cuedeck.listHistory());
   useEffect(() => {
     void refresh();
-  }, [settings.historyEnabled]);
+  }, [settings.historyEnabled, settings.historyRetentionDays]);
 
   const update = async (patch: Partial<PublicSettings>) => {
     await window.cuedeck.updatePublicSettings(patch);
@@ -702,6 +722,9 @@ function HistorySection({ settings, onSettingsChanged }: Props): React.JSX.Eleme
         </select>
       </label>
       <div className="row">
+        <button className="small" onClick={() => void refresh()}>
+          Refresh history
+        </button>
         <button
           className="small"
           disabled={items.length === 0}
@@ -730,7 +753,6 @@ function HistorySection({ settings, onSettingsChanged }: Props): React.JSX.Eleme
         </button>
         <button
           className="small danger"
-          disabled={items.length === 0}
           onClick={async () => {
             await window.cuedeck.clearHistory();
             await refresh();

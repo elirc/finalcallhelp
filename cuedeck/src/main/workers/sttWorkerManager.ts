@@ -51,7 +51,7 @@ export class SttWorkerManager {
   async isInstalled(modelId: string): Promise<boolean> {
     const manifest = await this.readManifest();
     const entry = manifest.models.find((m) => m.modelId === modelId);
-    if (!entry) return false;
+    if (!entry || !Array.isArray(entry.files) || entry.files.length === 0) return false;
     // Verify the recorded files are still present with the recorded sizes.
     for (const file of entry.files) {
       try {
@@ -80,13 +80,15 @@ export class SttWorkerManager {
 
   private spawn(): UtilityProcess {
     if (this.worker) return this.worker;
-    this.worker = utilityProcess.fork(this.workerPath, [], { serviceName: 'cuedeck-stt' });
-    this.worker.on('exit', () => {
+    const worker = utilityProcess.fork(this.workerPath, [], { serviceName: 'cuedeck-stt' });
+    this.worker = worker;
+    worker.on('exit', () => {
+      if (this.worker !== worker) return;
       this.worker = null;
       this.loadedModelId = null;
       this.status = 'idle';
     });
-    return this.worker;
+    return worker;
   }
 
   /** Kill the worker (freeing model memory); the next request respawns it. */

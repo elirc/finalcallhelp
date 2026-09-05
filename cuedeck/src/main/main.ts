@@ -2,11 +2,12 @@ import { app, BrowserWindow, desktopCapturer, safeStorage, session } from 'elect
 import os from 'node:os';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
-import type { OperationEvent, SessionEvent } from '../shared/domain';
+import type { OperationEvent, PublicSettings, SessionEvent } from '../shared/domain';
 import { Diagnostics } from './diagnostics';
 import { registerIpc, type AppServices } from './ipc/register';
 import { ProviderRegistry } from './providers/registry';
 import { CerebrasLlmProvider } from './providers/llm/cerebras';
+import { DemoLlmProvider } from './providers/llm/demo';
 import { GeminiLlmProvider } from './providers/llm/gemini';
 import { GroqLlmProvider } from './providers/llm/groq';
 import { OllamaProvider } from './providers/llm/ollama';
@@ -46,8 +47,8 @@ function preloadPath(): string {
 }
 
 function broadcast(
-  channel: 'session:event' | 'operation:event',
-  payload: SessionEvent | OperationEvent,
+  channel: 'session:event' | 'operation:event' | 'settings:changed',
+  payload: SessionEvent | OperationEvent | PublicSettings,
 ): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
@@ -77,6 +78,7 @@ async function bootstrap(): Promise<void> {
   registry.registerLlm(new CerebrasLlmProvider(keyFor('cerebras')));
   registry.registerLlm(new GeminiLlmProvider(keyFor('gemini')));
   registry.registerLlm(new OpenRouterProvider(keyFor('openrouter')));
+  registry.registerLlm(new DemoLlmProvider());
 
   const diagnostics = new Diagnostics(
     app.getVersion(),

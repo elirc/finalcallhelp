@@ -22,6 +22,7 @@ interface VaultFile {
 
 export class SecretVault {
   private readonly filePath: string;
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(
     userDataDir: string,
@@ -42,18 +43,29 @@ export class SecretVault {
     if (!this.safeStorage.isEncryptionAvailable()) {
       throw new CoachError('STORAGE_FAILED', 'OS credential encryption is unavailable');
     }
-    const vault = await this.read();
-    vault.entries[providerId] = {
-      ciphertext: this.safeStorage.encryptString(value).toString('base64'),
-      encryptedAt: new Date().toISOString(),
-    };
-    await writeJsonFile(this.filePath, vault);
+    await this.enqueue(async () => {
+      const vault = await this.read();
+      vault.entries[providerId] = {
+        ciphertext: this.safeStorage.encryptString(value).toString('base64'),
+        encryptedAt: new Date().toISOString(),
+      };
+      await writeJsonFile(this.filePath, vault);
+    });
   }
 
   async remove(providerId: string): Promise<void> {
-    const vault = await this.read();
-    delete vault.entries[providerId];
-    await writeJsonFile(this.filePath, vault);
+    await this.enqueue(async () => {
+      const vault = await this.read();
+      delete vault.entries[providerId];
+      await writeJsonFile(this.filePath, vault);
+    });
+  }
+
+  /** Keep concurrent account changes from overwriting one another. */
+  private enqueue(task: () => Promise<void>): Promise<void> {
+    const run = this.queue.then(task, task);
+    this.queue = run.catch(() => undefined);
+    return run;
   }
 
   async has(providerId: string): Promise<boolean> {

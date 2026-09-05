@@ -1,6 +1,12 @@
 import { DEFAULT_SETTINGS } from '../../shared/constants';
 import type { PublicSettings } from '../../shared/domain';
 import { publicSettingsSchema } from '../../shared/schemas';
+import {
+  CLOUD_MODELS,
+  DEFAULT_PROVIDER_MODELS,
+  LOCAL_STT_MODELS,
+  PROVIDERS,
+} from '../../shared/catalog';
 
 /**
  * Settings migrations. Each entry upgrades from its index version to the
@@ -31,5 +37,21 @@ export function migrateSettings(raw: unknown): PublicSettings {
     version = typeof data.schemaVersion === 'number' ? data.schemaVersion : version + 1;
   }
   const parsed = publicSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, ...data });
-  return parsed.success ? parsed.data : { ...DEFAULT_SETTINGS };
+  if (!parsed.success) return { ...DEFAULT_SETTINGS };
+  const settings = parsed.data;
+  if (PROVIDERS[settings.sttProviderId]?.kind !== 'stt') settings.sttProviderId = 'local-whisper';
+  if (PROVIDERS[settings.llmProviderId]?.kind !== 'llm') settings.llmProviderId = 'ollama';
+  if (settings.sttProviderId === 'local-whisper') {
+    if (!LOCAL_STT_MODELS.some((m) => m.id === settings.sttModelId))
+      settings.sttModelId = DEFAULT_PROVIDER_MODELS['local-whisper'];
+  } else settings.sttModelId = DEFAULT_PROVIDER_MODELS[settings.sttProviderId];
+  if (settings.llmProviderId !== 'ollama') {
+    if (
+      settings.llmProviderId !== 'openrouter' ||
+      (!settings.llmModelId.endsWith(':free') &&
+        settings.llmModelId !== CLOUD_MODELS.openRouterDefaultModel)
+    )
+      settings.llmModelId = DEFAULT_PROVIDER_MODELS[settings.llmProviderId];
+  }
+  return settings;
 }

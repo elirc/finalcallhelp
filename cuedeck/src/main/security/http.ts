@@ -48,7 +48,7 @@ export async function allowlistedFetch(url: string, options: FetchOptions = {}):
   if (timeoutMs) signals.push(AbortSignal.timeout(timeoutMs));
   const merged = signals.length > 0 ? AbortSignal.any(signals) : undefined;
   try {
-    return await fetch(url, { ...rest, signal: merged, redirect: 'follow' });
+    return await fetch(url, { ...rest, signal: merged, redirect: 'error' });
   } catch (err) {
     if (err instanceof Error && err.name === 'TimeoutError') {
       throw new CoachError('PROVIDER_TIMEOUT', `request to ${safeHost(url)} timed out`);

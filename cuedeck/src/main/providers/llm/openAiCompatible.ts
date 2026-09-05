@@ -49,6 +49,7 @@ export async function* streamChatCompletions(options: {
   apiKey: string;
   providerName: string;
   extraHeaders?: Record<string, string>;
+  extraBody?: Record<string, unknown>;
   request: AnswerRequest;
 }): AsyncIterable<AnswerDelta> {
   const { baseUrl, apiKey, providerName, request } = options;
@@ -64,6 +65,8 @@ export async function* streamChatCompletions(options: {
       body: JSON.stringify({
         model: request.modelId,
         stream: true,
+        max_completion_tokens: 2048,
+        ...options.extraBody,
         messages: [
           { role: 'system', content: request.system },
           { role: 'user', content: request.user },
@@ -97,6 +100,8 @@ export async function* streamChatCompletions(options: {
     } catch {
       return null; // tolerate comment/keepalive frames
     }
+    if (obj && typeof obj === 'object' && 'error' in obj)
+      throw new CoachError('PROVIDER_UNAVAILABLE', `${providerName} returned a stream error`);
     const parsed = chunkSchema.safeParse(obj);
     if (!parsed.success) return null;
     const text = parsed.data.choices[0]?.delta?.content ?? '';
@@ -128,7 +133,8 @@ export async function probeOpenAiCompatible(options: {
   }
   const started = Date.now();
   try {
-    const res = await allowlistedFetch(`${options.baseUrl.replace(/\/+$/, '')}/models`, {
+    const probePath = options.meta.id === 'openrouter' ? '/key' : '/models';
+    const res = await allowlistedFetch(`${options.baseUrl.replace(/\/+$/, '')}${probePath}`, {
       headers: { authorization: `Bearer ${options.apiKey}`, ...options.extraHeaders },
       signal: options.signal,
       timeoutMs: TIMEOUTS.probe,
@@ -175,6 +181,7 @@ export interface OpenAiCompatibleDescriptor {
   /** Models offered in the UI when the provider pins a fixed free set. */
   models: ModelSummary[];
   extraHeaders?: Record<string, string>;
+  extraBody?: Record<string, unknown>;
   /** Throw a CoachError before any request when the model is not permitted. */
   assertModelAllowed?: (modelId: string) => void;
 }
@@ -234,6 +241,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
       providerName: this.descriptor.providerName,
       extraHeaders: this.descriptor.extraHeaders,
       request: input,
+      extraBody: this.descriptor.extraBody,
     });
   }
 }

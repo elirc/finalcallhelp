@@ -98,7 +98,10 @@ export const providersProbeSchema = z.object({ providerId: z.string().min(1).max
 
 export const modelsListSchema = z.object({ providerId: z.string().min(1).max(64) });
 
-export const modelsDownloadSchema = z.object({ modelId: z.string().min(1).max(200) });
+export const modelsDownloadSchema = z.object({
+  modelId: z.string().min(1).max(200),
+  operationId: sessionIdSchema.optional(),
+});
 
 export const captureArmSchema = z.object({ sessionId: sessionIdSchema });
 

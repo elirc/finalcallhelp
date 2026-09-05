@@ -1,6 +1,7 @@
 /* CueDeck "studio console" design system (spec §8.1). */
 
 :root {
+  color-scheme: dark;
   --canvas: #0b1020;
   --surface-1: #11182b;
   --surface-2: #17213a;
@@ -124,6 +125,12 @@ a {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  min-height: 0;
+  flex: 1;
+}
+
+.setup-card {
+  border-color: var(--accent-strong);
 }
 
 .titlebar {

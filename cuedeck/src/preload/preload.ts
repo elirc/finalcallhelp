@@ -62,9 +62,11 @@ const api = {
 
   listProviders: () => invoke<ProviderMeta[]>('providers:list'),
   probeProvider: (providerId: string) => invoke<ProviderProbe>('providers:probe', { providerId }),
+  testResponseProvider: (providerId: string) =>
+    invoke<ProviderProbe>('providers:testResponse', { providerId }),
   listModels: (providerId: string) => invoke<ModelSummary[]>('models:list', { providerId }),
-  downloadModel: (modelId: string) =>
-    invoke<{ operationId: string }>('models:download', { modelId }),
+  downloadModel: (modelId: string, operationId?: string) =>
+    invoke<{ operationId: string }>('models:download', { modelId, operationId }),
   cancelDownload: (operationId: string) =>
     invoke<boolean>('models:cancelDownload', { operationId }),
 
@@ -99,6 +101,8 @@ const api = {
     subscribe<SessionEvent>('session:event', callback),
   onOperationEvent: (callback: (event: OperationEvent) => void) =>
     subscribe<OperationEvent>('operation:event', callback),
+  onSettingsChanged: (callback: (settings: PublicSettings) => void) =>
+    subscribe<PublicSettings>('settings:changed', callback),
 };
 
 export type CueDeckApi = typeof api;
