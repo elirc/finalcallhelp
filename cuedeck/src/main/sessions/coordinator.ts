@@ -119,23 +119,40 @@ export class SessionCoordinator {
   }
 
   /**
-   * Best-effort LLM warmup with no session attached, fired when capture is
-   * armed. Recording takes seconds; loading the model during them (instead
-   * of during transcription) takes the cold start fully out of the
-   * time-to-first-token path. Failures are swallowed — the real generate
-   * call reports them with proper error mapping.
+   * Best-effort provider warmup with no session attached, fired at startup
+   * and when capture is armed. Recording takes seconds; loading the speech
+   * model and the response model during them (instead of during the
+   * pipeline) takes both cold starts out of the time-to-answer path.
+   * Failures are swallowed — the real calls report them with proper error
+   * mapping.
    */
   async prewarm(): Promise<void> {
+    let settings: CoordinatorSettings;
     try {
-      const settings = await this.deps.getSettings();
+      settings = await this.deps.getSettings();
+    } catch {
+      return;
+    }
+    const jobs: Promise<void>[] = [];
+    try {
       const llm = this.deps.registry.getLlm(settings.llmProviderId);
-      if (!llm.warmup) return;
-      await llm
-        .warmup(settings.llmModelId, AbortSignal.timeout(TIMEOUTS.warmup))
-        .catch(() => undefined);
+      if (llm.warmup)
+        jobs.push(
+          llm.warmup(settings.llmModelId, AbortSignal.timeout(TIMEOUTS.warmup)).catch(() => {}),
+        );
     } catch {
       // Unknown provider IDs fail the session later with a precise error.
     }
+    try {
+      const stt = this.deps.registry.getStt(settings.sttProviderId);
+      if (stt.warmup)
+        jobs.push(
+          stt.warmup(settings.sttModelId, AbortSignal.timeout(TIMEOUTS.localStt)).catch(() => {}),
+        );
+    } catch {
+      // Same: reported precisely when a clip is actually submitted.
+    }
+    await Promise.all(jobs);
   }
 
   /** Full pipeline: validate WAV -> STT -> prompt -> streamed LLM. */

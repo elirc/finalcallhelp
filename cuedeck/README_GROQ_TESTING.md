@@ -154,7 +154,9 @@ Each turn is one clip. After **Done**, press **Listen** again for the next quest
 | **Try again**                            | Generates again from the current transcript and current defaults. It does not record again.                                                                          |
 | Session notes **Clear**                  | Clears only the temporary notes.                                                                                                                                     |
 | Default mode buttons                     | Set the saved mode used for subsequent responses; clicking a mode alone does not regenerate.                                                                         |
-| **Compact / Expand**                     | Toggle a smaller layout. Expand to see notes, practice, and default-mode controls. Recording remains visible.                                                        |
+| **Eye line**                             | Moves the coach window to the top-centre of its screen (under the camera) and keeps it on top. Same as Preferences → General → Dock at eye level now.                |
+| **Compact / Expand**                     | Toggle the eye-line layout: capture controls plus the response in larger text. Expand to see the transcript, notes, practice, and default-mode controls.             |
+| Active profile picker                    | Switches the profile (and its call type) used for the next response without opening Preferences. **Edit** opens the Profiles section.                                |
 | **Settings**                             | Opens Preferences in a separate window. Close that window to return.                                                                                                 |
 | **Check again** on the setup card        | Refreshes provider readiness after fixing a connection or setup issue.                                                                                               |
 | Error **Dismiss**                        | Clears the error and displayed session text so you can start again. Copy text you want to preserve first.                                                            |
@@ -219,6 +221,7 @@ Changes save automatically and apply to the Coach without a restart.
 | Setting                      | Options / effect                                                                                                                                  |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Keep the coach window on top | Keeps CueDeck above other application windows. Toggle off to restore normal stacking.                                                             |
+| Dock at eye level now        | Moves the coach window top-centre of its display and turns on Keep on top.                                                                        |
 | Compact coach layout         | Same saved setting as Compact / Expand.                                                                                                           |
 | Text size                    | 90–160%, in 5% increments.                                                                                                                        |
 | Maximum clip length          | 30–120 seconds, in 5-second increments. Set before starting a recording.                                                                          |

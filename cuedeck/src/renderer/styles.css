@@ -214,6 +214,60 @@ a {
   }
 }
 
+.titlebar .small {
+  min-height: 34px;
+  padding: 4px 10px;
+}
+
+/* Profile switcher lives in the title bar: small, never wider than the bar. */
+.profile-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.profile-switcher select {
+  width: auto;
+  max-width: 200px;
+  min-height: 34px;
+  padding: 4px 8px;
+  font-size: 0.9em;
+  text-overflow: ellipsis;
+}
+
+/* One-line readiness notice for the eye-line layout. */
+.setup-slim {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  border: 1px solid var(--accent-strong);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  font-size: 0.9em;
+  color: var(--muted);
+}
+
+/* Capture controls: fixed strip under the title bar so Listen/Stop and the
+   meter never scroll away from the response. */
+.capture-bar {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-1);
+}
+
+.capture-bar .auto-stop {
+  margin: 0 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.capture-bar .warn-banner {
+  margin: 8px 0 0;
+}
+
 .coach-body {
   flex: 1;
   overflow-y: auto;
@@ -221,6 +275,45 @@ a {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* Response first: it is the thing the user reads while on camera. */
+.response-card {
+  border-color: var(--surface-2);
+}
+
+.answer-placeholder {
+  color: var(--muted);
+  font-size: 0.92em;
+}
+
+button.selected {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  min-height: 0;
+  min-width: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  font-size: inherit;
+}
+
+.step-indicator {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.key-row {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
 }
 
 .card {
@@ -339,6 +432,15 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+.status-rail .spacer {
+  flex: 1;
+}
+
+.status-rail .shortcuts {
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
 .error-banner {
   border: 1px solid var(--danger);
   background: rgb(255 107 115 / 10%);
@@ -442,6 +544,9 @@ a {
   white-space: nowrap;
 }
 
+/* Compact = eye-line layout: the response fills the window in larger text,
+   the top of the answer stays put while it streams, and everything that is
+   not needed mid-call is hidden. */
 .compact .coach-body {
   padding: 8px;
   gap: 8px;
@@ -449,6 +554,50 @@ a {
 
 .compact .card {
   padding: 8px 10px;
+}
+
+.compact .capture-bar {
+  padding: 6px 10px;
+}
+
+.compact .response-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.compact .response-card .answer-text {
+  flex: 1;
+  overflow-y: auto;
+  font-size: 1.35em;
+  line-height: 1.55;
+  max-width: 72ch;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.compact .status-rail .shortcuts {
+  display: none;
+}
+
+.compact .profile-switcher select {
+  max-width: 170px;
+}
+
+/* Preferences on a narrow window: sidebar becomes a top row. */
+@media (max-width: 560px) {
+  .prefs-shell {
+    flex-direction: column;
+  }
+
+  .prefs-nav {
+    width: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
 }
 
 table.history {

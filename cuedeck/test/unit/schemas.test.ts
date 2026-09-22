@@ -184,6 +184,24 @@ describe('profileSchema', () => {
     ).toBe(true);
   });
 
+  it('defaults call type and tech stack for profiles saved before they existed', () => {
+    const parsed = profileSchema.parse(validProfile);
+    expect(parsed.callType).toBe('general');
+    expect(parsed.techStack).toBe('');
+  });
+
+  it('accepts known call types and rejects unknown ones', () => {
+    expect(
+      profileSchema.safeParse({ ...validProfile, callType: 'technical-interview' }).success,
+    ).toBe(true);
+    expect(profileSchema.safeParse({ ...validProfile, callType: 'poetry-slam' }).success).toBe(
+      false,
+    );
+    expect(profileSchema.safeParse({ ...validProfile, techStack: 'x'.repeat(4_001) }).success).toBe(
+      false,
+    );
+  });
+
   it('rejects fields one character over the maxima', () => {
     expect(profileSchema.safeParse({ ...validProfile, summary: 'x'.repeat(20_001) }).success).toBe(
       false,

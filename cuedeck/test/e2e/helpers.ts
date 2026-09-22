@@ -7,13 +7,15 @@ import path from 'node:path';
 
 export interface LaunchOptions {
   seedSettings?: Record<string, unknown>;
+  /** Reuse an existing user-data dir (restart scenarios) instead of a fresh temp dir. */
+  userData?: string;
 }
 
 export async function launchApp(options: LaunchOptions = {}): Promise<{
   app: ElectronApplication;
   userData: string;
 }> {
-  const userData = mkdtempSync(path.join(os.tmpdir(), 'cuedeck-e2e-'));
+  const userData = options.userData ?? mkdtempSync(path.join(os.tmpdir(), 'cuedeck-e2e-'));
   mkdirSync(userData, { recursive: true });
   if (options.seedSettings) {
     writeFileSync(

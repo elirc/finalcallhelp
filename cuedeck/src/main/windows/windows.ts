@@ -1,6 +1,8 @@
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, screen } from 'electron';
 import path from 'node:path';
+import type { PreferencesSection } from '../../shared/domain';
 import { hardenWebContents } from '../security/windowSecurity';
+import { COACH_MIN_SIZE, eyeLinePlacement, isMostlyVisible, type Rect } from './placement';
 
 /**
  * Window factory. Both windows use the same sandboxed renderer bundle;
@@ -30,13 +32,31 @@ const SECURE_PREFERENCES = {
   spellcheck: false,
 } as const;
 
-export function createCoachWindow(preloadPath: string, alwaysOnTop: boolean): BrowserWindow {
+/** Eye-line bounds on the display that currently contains `reference` (or the primary one). */
+export function eyeLineBoundsFor(reference?: Rect): Rect {
+  const display = reference ? screen.getDisplayMatching(reference) : screen.getPrimaryDisplay();
+  return eyeLinePlacement(display.workArea);
+}
+
+/**
+ * Where the coach window opens: the remembered position when it is still on
+ * a connected display, otherwise top-centre of the primary display (eye line).
+ */
+export function initialCoachBounds(remembered: Rect | null): Rect {
+  const displays = screen.getAllDisplays().map((d) => d.workArea);
+  if (remembered && isMostlyVisible(remembered, displays)) return remembered;
+  return eyeLineBoundsFor();
+}
+
+export function createCoachWindow(
+  preloadPath: string,
+  options: { alwaysOnTop: boolean; bounds: Rect },
+): BrowserWindow {
   const win = new BrowserWindow({
-    width: 620,
-    height: 640,
-    minWidth: 440,
-    minHeight: 360,
-    alwaysOnTop,
+    ...options.bounds,
+    minWidth: COACH_MIN_SIZE.width,
+    minHeight: COACH_MIN_SIZE.height,
+    alwaysOnTop: options.alwaysOnTop,
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#0b1020',
@@ -54,11 +74,12 @@ export function createCoachWindow(preloadPath: string, alwaysOnTop: boolean): Br
 export function createPreferencesWindow(
   preloadPath: string,
   parent?: BrowserWindow,
+  section: PreferencesSection = 'general',
 ): BrowserWindow {
   const win = new BrowserWindow({
     width: 720,
     height: 680,
-    minWidth: 560,
+    minWidth: 480,
     minHeight: 480,
     parent,
     show: false,
@@ -69,8 +90,9 @@ export function createPreferencesWindow(
   });
   hardenWebContents(win);
   const entry = rendererEntry();
-  if (entry.devUrl) void win.loadURL(`${entry.devUrl}#/preferences`);
-  else void win.loadFile(entry.file as string, { hash: '/preferences' });
+  const hash = `/preferences/${section}`;
+  if (entry.devUrl) void win.loadURL(`${entry.devUrl}#${hash}`);
+  else void win.loadFile(entry.file as string, { hash });
   win.once('ready-to-show', () => win.show());
   return win;
 }

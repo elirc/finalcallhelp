@@ -242,7 +242,9 @@ test.describe('coach workflow', () => {
       await page.getByTestId('transcript-input').fill('Why do you want this job?');
       await page.getByTestId('regenerate-button').click();
       await expect(page.getByTestId('answer-text')).toContainText('Noted.', { timeout: 15_000 });
-      const body = ollama.chatBodies()[0];
+      // The app also pre-warms the model at startup (an /api/chat with no
+      // messages); the last body is the real request.
+      const body = ollama.chatBodies().at(-1) ?? '';
       expect(body).toContain('<session_notes>');
       expect(body).toContain('Screening call with Acme for QA lead.');
     } finally {
@@ -272,15 +274,52 @@ test.describe('coach workflow', () => {
     }
   });
 
-  test('compact mode keeps capture controls and status visible', async () => {
+  test('compact mode keeps capture controls, the response, and status visible', async () => {
     const { app } = await launchApp({ seedSettings: { ...READY_SETTINGS, compactMode: true } });
     try {
       const page = await app.firstWindow();
       await expect(page.getByTestId('listen-button')).toBeVisible();
       await expect(page.getByTestId('phase-chip')).toBeVisible();
+      await expect(page.getByTestId('answer-text')).toBeVisible();
+      // Setup-only cards are hidden in the eye-line layout.
+      await expect(page.getByTestId('transcript-input')).toHaveCount(0);
       // Expand restores the full layout.
-      await page.getByRole('button', { name: 'Expand' }).click();
+      await page.getByRole('button', { name: 'Expand', exact: true }).click();
       await expect(page.getByTestId('transcript-input')).toBeVisible();
+    } finally {
+      await app.close();
+    }
+  });
+
+  test('the response card sits above the transcript, and Eye line docks the window top-centre', async () => {
+    const { app } = await launchApp({ seedSettings: READY_SETTINGS });
+    try {
+      const page = await app.firstWindow();
+      const answerTop = await page
+        .getByTestId('answer-text')
+        .evaluate((el) => el.getBoundingClientRect().top);
+      const transcriptTop = await page
+        .getByTestId('transcript-input')
+        .evaluate((el) => el.getBoundingClientRect().top);
+      expect(answerTop).toBeLessThan(transcriptTop);
+      await page.getByTestId('dock-eye-line').click();
+      await expect
+        .poll(() =>
+          app.evaluate(({ BrowserWindow, screen }) => {
+            const win = BrowserWindow.getAllWindows()[0];
+            const bounds = win.getBounds();
+            const area = screen.getDisplayMatching(bounds).workArea;
+            return {
+              top: Math.abs(bounds.y - area.y) <= 2,
+              centred: Math.abs(bounds.x + bounds.width / 2 - (area.x + area.width / 2)) <= 2,
+              onTop: win.isAlwaysOnTop(),
+            };
+          }),
+        )
+        .toEqual({ top: true, centred: true, onTop: true });
+      expect((await page.evaluate(() => window.cuedeck.getPublicSettings())).alwaysOnTop).toBe(
+        true,
+      );
     } finally {
       await app.close();
     }

@@ -81,11 +81,13 @@ parentPort.on('message', (event: { data: InMessage }) => {
       try {
         if (loading) await loading;
         if (!transcriber) throw new Error('model not loaded');
-        const options: Record<string, unknown> = {
-          chunk_length_s: 30,
-          stride_length_s: 5,
-          return_timestamps: true,
-        };
+        // Whisper works on 30 s windows. Clips that fit in one window skip
+        // chunking and timestamp decoding, which are only needed to stitch
+        // longer audio; the UI never shows segment timestamps.
+        const longForm = msg.audio.length > 30 * 16_000;
+        const options: Record<string, unknown> = longForm
+          ? { chunk_length_s: 30, stride_length_s: 5, return_timestamps: true }
+          : { return_timestamps: false };
         if (msg.language && msg.language !== 'auto') options.language = msg.language;
         const result = await transcriber(msg.audio, options);
         post({

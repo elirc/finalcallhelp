@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import type {
   AppCapabilities,
   OperationEvent,
+  PreferencesSection,
+  ProviderProbe,
   PublicSettings,
   SessionEvent,
 } from '../../shared/domain';
@@ -12,9 +14,11 @@ import {
   diagnosticsExportSchema,
   historyDeleteSchema,
   historyListQuerySchema,
+  modelsCancelDownloadSchema,
   modelsDownloadSchema,
   modelsListSchema,
   openExternalSchema,
+  openPreferencesSchema,
   profileDeleteSchema,
   profileSaveSchema,
   providersProbeSchema,
@@ -29,6 +33,7 @@ import {
 import { TIMEOUTS } from '../../shared/constants';
 import { CoachError, toPublicError } from '../../shared/errors';
 import type { Diagnostics } from '../diagnostics';
+import { ProbeCache } from '../providers/probeCache';
 import type { ProviderRegistry } from '../providers/registry';
 import type { CaptureGrant } from '../security/captureGrant';
 import { isTrustedSender, openExternalChecked } from '../security/windowSecurity';
@@ -54,7 +59,9 @@ export interface AppServices {
     channel: 'session:event' | 'operation:event' | 'settings:changed',
     payload: SessionEvent | OperationEvent | PublicSettings,
   ) => void;
-  openPreferencesWindow: () => void;
+  openPreferencesWindow: (section?: PreferencesSection) => void;
+  /** Move the coach window to eye line (top-centre) and pin it on top. */
+  dockEyeLine: () => Promise<void>;
   applyWindowSettings: () => Promise<void>;
 }
 
@@ -86,12 +93,32 @@ function secureHandle(channel: string, handler: Handler): void {
 }
 
 const downloadOperations = new Map<string, AbortController>();
+const probeCache = new ProbeCache<ProviderProbe>();
+
+/**
+ * Cache key covering every setting a probe result depends on, so an
+ * unrelated settings change (font size, compact mode) reuses the cached
+ * verdict while a model or server change re-probes.
+ */
+function probeKey(providerId: string, settings: PublicSettings): string {
+  const meta = PROVIDERS[providerId];
+  const configured = meta
+    ? (settings.credentials[meta.credentialId ?? meta.id]?.configured ?? false)
+    : false;
+  return [providerId, settings.sttModelId, settings.ollamaBaseUrl, configured].join('|');
+}
 
 export function registerIpc(services: AppServices): void {
   secureHandle('app:getCapabilities', () => services.capabilities());
 
-  secureHandle('app:openPreferences', () => {
-    services.openPreferencesWindow();
+  secureHandle('app:openPreferences', (_event, raw) => {
+    const options = openPreferencesSchema.parse(raw);
+    services.openPreferencesWindow(options?.section);
+    return true;
+  });
+
+  secureHandle('app:dockEyeLine', async () => {
+    await services.dockEyeLine();
     return true;
   });
 
@@ -118,6 +145,7 @@ export function registerIpc(services: AppServices): void {
     if (PROVIDERS[providerId]?.location !== 'cloud' || !value.trim())
       throw new CoachError('CREDENTIAL_MISSING');
     await services.secrets.set(providerId, value.trim());
+    probeCache.invalidate(); // a replaced key must be re-verified, not served from cache
     services.broadcast(
       'settings:changed',
       await services.settings.setCredentialFlag(providerId, true),
@@ -128,6 +156,7 @@ export function registerIpc(services: AppServices): void {
   secureHandle('secrets:remove', async (_event, raw) => {
     const { providerId } = secretsRemoveSchema.parse(raw);
     await services.secrets.remove(providerId);
+    probeCache.invalidate();
     services.broadcast(
       'settings:changed',
       await services.settings.setCredentialFlag(providerId, false),
@@ -140,9 +169,14 @@ export function registerIpc(services: AppServices): void {
   secureHandle('providers:list', () => services.registry.list());
 
   secureHandle('providers:probe', async (_event, raw) => {
-    const { providerId } = providersProbeSchema.parse(raw);
+    const { providerId, fresh } = providersProbeSchema.parse(raw);
     const provider = services.registry.getAny(providerId);
-    return provider.probe(AbortSignal.timeout(TIMEOUTS.probe));
+    const settings = await services.settings.get();
+    return probeCache.get(
+      probeKey(providerId, settings),
+      () => provider.probe(AbortSignal.timeout(TIMEOUTS.probe)),
+      fresh,
+    );
   });
 
   secureHandle('providers:testResponse', async (_event, raw) => {
@@ -204,6 +238,7 @@ export function registerIpc(services: AppServices): void {
         controller.signal,
       )
       .then(() => {
+        probeCache.invalidate('local-whisper');
         services.broadcast('operation:event', { type: 'complete', operationId });
       })
       .catch((err: unknown) => {
@@ -218,8 +253,7 @@ export function registerIpc(services: AppServices): void {
   });
 
   secureHandle('models:cancelDownload', (_event, raw) => {
-    const { operationId } = (raw ?? {}) as { operationId?: string };
-    if (typeof operationId !== 'string') throw new CoachError('UNKNOWN', 'missing operationId');
+    const { operationId } = modelsCancelDownloadSchema.parse(raw);
     downloadOperations.get(operationId)?.abort();
     return true;
   });
@@ -228,8 +262,8 @@ export function registerIpc(services: AppServices): void {
 
   secureHandle('capture:arm', (_event, raw) => {
     const { sessionId } = captureArmSchema.parse(raw);
-    // Warm the LLM while the clip is still being recorded so the model's
-    // cold start never lands on the time-to-first-token path.
+    // Warm the speech and response models while the clip is still being
+    // recorded so neither cold start lands on the time-to-answer path.
     void services.coordinator.prewarm();
     return services.captureGrant.arm(sessionId);
   });

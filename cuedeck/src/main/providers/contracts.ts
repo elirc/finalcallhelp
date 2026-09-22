@@ -19,6 +19,12 @@ export interface SttProvider {
   probe(signal: AbortSignal): Promise<ProviderProbe>;
   listModels(signal: AbortSignal): Promise<ModelSummary[]>;
   transcribe(input: TranscribeInput): Promise<TranscriptResult>;
+  /**
+   * Best-effort preparation (same contract as `LlmProvider.warmup`): a local
+   * engine loads its already-downloaded model so the first clip does not pay
+   * the multi-second load. Must never trigger a download.
+   */
+  warmup?(modelId: string, signal: AbortSignal): Promise<void>;
 }
 
 export interface AnswerRequest {

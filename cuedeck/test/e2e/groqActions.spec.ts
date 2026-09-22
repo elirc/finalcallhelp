@@ -172,10 +172,18 @@ test('profiles, notes, answer modes, and follow-ups reach Groq; deleting the act
       .fill('I organize customer support tickets.');
     await prefs.getByLabel('Role / call context').fill('Practice for a support role.');
     await prefs.getByLabel('Things to emphasize').fill('Patient communication.');
+    await prefs.getByLabel('Call type').selectOption('customer-support');
+    await prefs
+      .getByLabel('Tech stack and domain', { exact: false })
+      .fill('Zendesk, SLA reporting');
     await prefs.getByRole('button', { name: 'Save profile' }).click();
     const card = prefs.locator('.card.row').filter({ hasText: 'Synthetic support profile' });
+    await expect(card).toContainText('Customer support');
     await card.getByRole('button', { name: 'Make active' }).click();
     await expect(card).toContainText('active');
+    // The coach shows the active profile and lets the user switch without Preferences.
+    await expect(page.getByTestId('status-profile')).toContainText('Customer support');
+    await expect(page.getByTestId('profile-switcher')).toHaveValue(/.+/);
     await card.getByRole('button', { name: 'Edit', exact: true }).click();
     await prefs
       .getByLabel('Background / resume summary')
@@ -191,6 +199,10 @@ test('profiles, notes, answer modes, and follow-ups reach Groq; deleting the act
     expect(sent?.messages[1].content).toContain('I resolve customer support tickets.');
     expect(sent?.messages[1].content).toContain('Mention the next step.');
     expect(sent?.messages[1].content).toContain('Requested mode: clarify');
+    expect(sent?.messages[1].content).toContain(
+      '<tech_stack>\nZendesk, SLA reporting\n</tech_stack>',
+    );
+    expect(sent?.messages[0].content).toContain('customer support conversation');
     await page
       .getByRole('group', { name: 'response follow-ups' })
       .getByRole('button', { name: 'Shorter', exact: true })
@@ -200,7 +212,9 @@ test('profiles, notes, answer modes, and follow-ups reach Groq; deleting the act
     expect(sent?.messages[1].content).toContain('Target speaking time: 15 seconds');
     await expect(page.getByTestId('answer-stats')).toContainText('15 s target');
     expect((await page.evaluate(() => window.cuedeck.getPublicSettings())).targetSeconds).toBe(30);
+    // Destructive actions are two-step: arm, then confirm.
     await card.getByRole('button', { name: 'Delete', exact: true }).click();
+    await card.getByRole('button', { name: 'Confirm delete', exact: true }).click();
     await expect(card).toHaveCount(0);
     expect(
       (await page.evaluate(() => window.cuedeck.getPublicSettings())).activeProfileId,
@@ -268,7 +282,8 @@ test('history search, real file exports, retention changes, and deletion stay co
     await prefs.getByTestId('history-toggle').click();
     await expect(prefs.getByTestId('history-toggle')).not.toBeChecked();
     expect(await page.evaluate(() => window.cuedeck.exportHistory())).toEqual([]);
-    await prefs.getByRole('button', { name: 'Delete all' }).click();
+    await prefs.getByRole('button', { name: 'Delete all', exact: true }).click();
+    await prefs.getByRole('button', { name: 'Confirm delete all', exact: true }).click();
     await prefs.getByTestId('history-toggle').click();
     await expect(prefs.locator('table.history tr')).toHaveCount(0);
     await respond(page, 'Delete this individual row');

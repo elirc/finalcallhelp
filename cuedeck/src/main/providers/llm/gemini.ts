@@ -30,6 +30,41 @@ export function supportsDisabledThinking(modelId: string): boolean {
   return modelId.includes('2.5-flash');
 }
 
+/**
+ * Key check shared by the Gemini response and audio adapters (one account,
+ * one key): a GET on the catalog model only inspects the status line.
+ */
+export async function probeGemini(options: {
+  baseUrl: string;
+  apiKey: string | null;
+  providerId: string;
+  signal: AbortSignal;
+}): Promise<ProviderProbe> {
+  const { baseUrl, apiKey, providerId, signal } = options;
+  if (!apiKey) return { providerId, status: 'missing-credential' };
+  const started = Date.now();
+  try {
+    const res = await allowlistedFetch(`${baseUrl}/models/${CLOUD_MODELS.geminiModel}`, {
+      headers: { 'x-goog-api-key': apiKey },
+      signal,
+      timeoutMs: TIMEOUTS.probe,
+    });
+    discardBody(res); // probes only inspect the status line
+    if (res.status === 400 || res.status === 401 || res.status === 403) {
+      return { providerId, status: 'missing-credential', detail: 'API key rejected' };
+    }
+    if (res.status === 429) return { providerId, status: 'quota-limited' };
+    if (!res.ok) return { providerId, status: 'unknown-failure', detail: `HTTP ${res.status}` };
+    return { providerId, status: 'ready', latencyMs: Date.now() - started };
+  } catch (err) {
+    return {
+      providerId,
+      status: 'unreachable',
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export class GeminiLlmProvider implements LlmProvider {
   readonly meta = PROVIDERS.gemini;
 
@@ -39,38 +74,12 @@ export class GeminiLlmProvider implements LlmProvider {
   ) {}
 
   async probe(signal: AbortSignal): Promise<ProviderProbe> {
-    const apiKey = await this.getApiKey();
-    if (!apiKey) return { providerId: this.meta.id, status: 'missing-credential' };
-    const started = Date.now();
-    try {
-      const res = await allowlistedFetch(`${this.baseUrl}/models/${CLOUD_MODELS.geminiModel}`, {
-        headers: { 'x-goog-api-key': apiKey },
-        signal,
-        timeoutMs: TIMEOUTS.probe,
-      });
-      discardBody(res); // probes only inspect the status line
-      if (res.status === 400 || res.status === 401 || res.status === 403) {
-        return {
-          providerId: this.meta.id,
-          status: 'missing-credential',
-          detail: 'API key rejected',
-        };
-      }
-      if (res.status === 429) return { providerId: this.meta.id, status: 'quota-limited' };
-      if (!res.ok)
-        return {
-          providerId: this.meta.id,
-          status: 'unknown-failure',
-          detail: `HTTP ${res.status}`,
-        };
-      return { providerId: this.meta.id, status: 'ready', latencyMs: Date.now() - started };
-    } catch (err) {
-      return {
-        providerId: this.meta.id,
-        status: 'unreachable',
-        detail: err instanceof Error ? err.message : String(err),
-      };
-    }
+    return probeGemini({
+      baseUrl: this.baseUrl,
+      apiKey: await this.getApiKey(),
+      providerId: this.meta.id,
+      signal,
+    });
   }
 
   async listModels(): Promise<ModelSummary[]> {

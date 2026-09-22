@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CALL_TYPE_IDS, DEFAULT_CALL_TYPE } from './callTypes';
 import { PUBLIC_ERROR_CODES } from './domain';
 
 export const answerModeSchema = z.enum(['natural', 'concise', 'bullets', 'star', 'clarify']);
@@ -56,9 +57,25 @@ export const profileSchema = z.object({
   summary: z.string().max(20_000),
   roleContext: z.string().max(20_000),
   emphasisNotes: z.string().max(8_000),
+  // Added after first release: defaults keep older profiles.json files valid.
+  callType: z.enum(CALL_TYPE_IDS).default(DEFAULT_CALL_TYPE),
+  techStack: z.string().max(4_000).default(''),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
+
+export const preferencesSectionSchema = z.enum([
+  'general',
+  'providers',
+  'profiles',
+  'history',
+  'diagnostics',
+  'about',
+]);
+
+export const openPreferencesSchema = z
+  .object({ section: preferencesSectionSchema.optional() })
+  .optional();
 
 export const historyItemSchema = z.object({
   id: z.string().min(1),
@@ -94,7 +111,11 @@ export const secretsSetSchema = z.object({
 
 export const secretsRemoveSchema = z.object({ providerId: z.string().min(1).max(64) });
 
-export const providersProbeSchema = z.object({ providerId: z.string().min(1).max(64) });
+/** `fresh` bypasses the main-process probe cache (explicit "Check again"). */
+export const providersProbeSchema = z.object({
+  providerId: z.string().min(1).max(64),
+  fresh: z.boolean().optional(),
+});
 
 export const modelsListSchema = z.object({ providerId: z.string().min(1).max(64) });
 
@@ -102,6 +123,8 @@ export const modelsDownloadSchema = z.object({
   modelId: z.string().min(1).max(200),
   operationId: sessionIdSchema.optional(),
 });
+
+export const modelsCancelDownloadSchema = z.object({ operationId: sessionIdSchema });
 
 export const captureArmSchema = z.object({ sessionId: sessionIdSchema });
 

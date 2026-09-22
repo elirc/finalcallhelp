@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
+import type { CallType } from '../../shared/callTypes';
 import type { ModelSummary, ProviderProbe, PublicSettings } from '../../shared/domain';
 import { ClipRecorder } from '../audio/recorder';
 import { LOCAL_STT_MODELS } from '../../shared/catalog';
 import { errorMessage, setupPreset } from '../../shared/setup';
+import { CallTypeFields } from '../profiles/ProfileFields';
 import { CloudSetup } from './CloudSetup';
 
 interface Props {
@@ -11,6 +13,16 @@ interface Props {
 }
 
 type Step = 'consent' | 'mode' | 'local-setup' | 'cloud-setup' | 'audio-test' | 'profile';
+
+const STEP_NUMBER: Record<Step, number> = {
+  consent: 1,
+  mode: 2,
+  'local-setup': 3,
+  'cloud-setup': 3,
+  'audio-test': 4,
+  profile: 5,
+};
+const STEP_COUNT = 5;
 
 /**
  * First-run flow (spec §8.5). The recommended local path never shows an
@@ -23,6 +35,9 @@ export function Onboarding({ settings, onSettingsChanged }: Props): React.JSX.El
   return (
     <div className="app-shell">
       <div className="onboarding" data-testid={`onboarding-${step}`}>
+        <p className="step-indicator" data-testid="onboarding-step">
+          Step {STEP_NUMBER[step]} of {STEP_COUNT}
+        </p>
         {step !== 'consent' && step !== 'mode' && (
           <button className="small" onClick={() => setStep('mode')}>
             Back to setup options
@@ -465,6 +480,8 @@ function ProfileStep({
   const [name, setName] = useState('My background');
   const [summary, setSummary] = useState('');
   const [roleContext, setRoleContext] = useState('');
+  const [callType, setCallType] = useState<CallType>('general');
+  const [techStack, setTechStack] = useState('');
   const [saving, setSaving] = useState(false);
 
   return (
@@ -472,12 +489,20 @@ function ProfileStep({
       <h1>Add your background (optional)</h1>
       <p>
         CueDeck grounds responses in what you provide here — it is instructed never to invent
-        experience you did not list. You can add more profiles later in Preferences.
+        experience you did not list. Pick the kind of call this profile is for; you can add one
+        profile per call type (a React interview, a sales demo) later in Preferences.
       </p>
       <label className="field">
         <span>Profile name</span>
         <input maxLength={120} value={name} onChange={(e) => setName(e.target.value)} />
       </label>
+      <CallTypeFields
+        draft={{ callType, techStack }}
+        onChange={(patch) => {
+          if (patch.callType !== undefined) setCallType(patch.callType);
+          if (patch.techStack !== undefined) setTechStack(patch.techStack);
+        }}
+      />
       <label className="field">
         <span>Your background / resume summary ({summary.length} characters)</span>
         <textarea
@@ -504,12 +529,14 @@ function ProfileStep({
           onClick={async () => {
             setSaving(true);
             try {
-              if (summary.trim() || roleContext.trim()) {
+              if (summary.trim() || roleContext.trim() || techStack.trim()) {
                 const profile = await window.cuedeck.saveProfile({
                   name: name.trim() || 'My background',
                   summary,
                   roleContext,
                   emphasisNotes: '',
+                  callType,
+                  techStack,
                 });
                 await window.cuedeck.updatePublicSettings({ activeProfileId: profile.id });
                 await onSettingsChanged();

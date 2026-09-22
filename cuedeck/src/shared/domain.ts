@@ -4,6 +4,12 @@
  * schemas in `schemas.ts`; these types are the static views of them.
  */
 
+import type { CallType } from './callTypes';
+
+/** Sections of the preferences window that can be deep-linked. */
+export type PreferencesSection =
+  'general' | 'providers' | 'profiles' | 'history' | 'diagnostics' | 'about';
+
 /** Where a provider runs; drives consent/disclosure UI for cloud providers. */
 export type ProcessingLocation = 'local' | 'cloud';
 
@@ -165,6 +171,14 @@ export interface Profile {
   summary: string;
   roleContext: string;
   emphasisNotes: string;
+  /**
+   * Kind of conversation this profile is for (see `callTypes.ts`). Shapes
+   * the instruction side of the prompt; defaults to 'general' for profiles
+   * saved before the field existed.
+   */
+  callType?: CallType;
+  /** Technologies, tools, and domains the user can speak to for this call. */
+  techStack?: string;
   createdAt: string;
   updatedAt: string;
 }

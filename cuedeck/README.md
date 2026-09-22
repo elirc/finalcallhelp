@@ -128,6 +128,15 @@ Everything is tuned for one loop: someone asks a question, you get a speakable r
   offline — it reuses the same respond pipeline.
 - **Speaking-pace estimate**: each finished answer shows its word count and estimated speaking
   time against your target (15/30/60 s), so you know whether the draft fits before you use it.
+- **Eye-line placement**: the coach window opens top-centre of the screen, right under a
+  laptop or monitor webcam, with the response card first, so reading the answer keeps your
+  gaze near the camera. **Eye line** in the title bar (or Preferences → General) re-docks it
+  there and pins it above the call; **Compact** hides everything but the controls and the
+  response in larger text. The window remembers where you last put it.
+- **Call-type profiles**: each profile carries a call type (technical interview, behavioral
+  interview, sales or discovery call, customer support, team meeting, general) and an
+  optional tech stack. The call type adds fixed answering rules to the prompt; the tech
+  stack is sent as fenced reference data. Switch profiles from the title-bar picker.
 - **Keyboard shortcuts**: `Ctrl+L` listen / stop &amp; respond, `Esc` cancel, `Ctrl+Shift+C`
   copy the response.
 - **History search** (Preferences → History, only if history is enabled): filter saved

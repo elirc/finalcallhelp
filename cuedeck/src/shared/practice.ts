@@ -7,7 +7,7 @@
  */
 
 export type PracticeCategory =
-  'background' | 'behavioral' | 'motivation' | 'teamwork' | 'curveball';
+  'background' | 'behavioral' | 'technical' | 'motivation' | 'teamwork' | 'curveball';
 
 export interface PracticeQuestion {
   id: string;
@@ -20,6 +20,7 @@ export const PRACTICE_CATEGORIES: Array<{ id: PracticeCategory | 'all'; label: s
   { id: 'all', label: 'All categories' },
   { id: 'background', label: 'Background' },
   { id: 'behavioral', label: 'Behavioral' },
+  { id: 'technical', label: 'Technical' },
   { id: 'motivation', label: 'Motivation' },
   { id: 'teamwork', label: 'Teamwork' },
   { id: 'curveball', label: 'Curveballs' },
@@ -71,6 +72,42 @@ export const PRACTICE_QUESTIONS: readonly PracticeQuestion[] = [
     id: 'bh-feedback',
     category: 'behavioral',
     text: 'Tell me about a time you received hard feedback. What did you do next?',
+  },
+  // technical (stack-agnostic on purpose: the profile's tech stack gives the model the specifics)
+  {
+    id: 'te-design',
+    category: 'technical',
+    text: 'Walk me through how you would design a system that has to handle ten times the current load.',
+  },
+  {
+    id: 'te-debug',
+    category: 'technical',
+    text: 'How do you approach debugging a production issue you have never seen before?',
+  },
+  {
+    id: 'te-tradeoff',
+    category: 'technical',
+    text: 'Tell me about a technical decision where you chose the less obvious option. Why?',
+  },
+  {
+    id: 'te-testing',
+    category: 'technical',
+    text: 'How do you decide what to test, and what does your testing strategy look like?',
+  },
+  {
+    id: 'te-review',
+    category: 'technical',
+    text: 'What do you look for when reviewing someone else’s code?',
+  },
+  {
+    id: 'te-legacy',
+    category: 'technical',
+    text: 'How would you approach improving a legacy codebase without stopping feature work?',
+  },
+  {
+    id: 'te-explain',
+    category: 'technical',
+    text: 'Explain a technology from your stack to someone who is not an engineer.',
   },
   // motivation
   { id: 'mo-why-role', category: 'motivation', text: 'Why do you want this role?' },

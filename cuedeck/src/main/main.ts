@@ -2,7 +2,12 @@ import { app, BrowserWindow, desktopCapturer, safeStorage, session } from 'elect
 import os from 'node:os';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
-import type { OperationEvent, PublicSettings, SessionEvent } from '../shared/domain';
+import type {
+  OperationEvent,
+  PreferencesSection,
+  PublicSettings,
+  SessionEvent,
+} from '../shared/domain';
 import { Diagnostics } from './diagnostics';
 import { registerIpc, type AppServices } from './ipc/register';
 import { ProviderRegistry } from './providers/registry';
@@ -22,7 +27,13 @@ import { SecretVault } from './settings/secretVault';
 import { SessionCoordinator } from './sessions/coordinator';
 import { HistoryStore } from './storage/historyStore';
 import { ProfileStore } from './storage/profileStore';
-import { createCoachWindow, createPreferencesWindow } from './windows/windows';
+import {
+  createCoachWindow,
+  createPreferencesWindow,
+  eyeLineBoundsFor,
+  initialCoachBounds,
+} from './windows/windows';
+import { WindowStateStore } from './windows/windowState';
 import { SttWorkerManager } from './workers/sttWorkerManager';
 
 if (started) {
@@ -41,6 +52,9 @@ if (!app.requestSingleInstanceLock()) {
 
 let coachWindow: BrowserWindow | null = null;
 let preferencesWindow: BrowserWindow | null = null;
+/** Set once the app or the coach window is going away, so the preferences
+ *  window really closes instead of hiding for reuse. */
+let shuttingDown = false;
 
 function preloadPath(): string {
   return path.join(__dirname, 'preload.js');
@@ -63,6 +77,7 @@ async function bootstrap(): Promise<void> {
   const secrets = new SecretVault(userData, safeStorage);
   const history = new HistoryStore(userData);
   const profiles = new ProfileStore(userData);
+  const windowState = new WindowStateStore(userData);
   const captureGrant = new CaptureGrant();
   const sttWorkers = new SttWorkerManager(path.join(__dirname, 'sttWorker.js'), modelsDir);
 
@@ -101,6 +116,26 @@ async function bootstrap(): Promise<void> {
     recordError: (code, message) => diagnostics.recordError(code, message),
   });
 
+  const openPreferencesWindow = (section?: PreferencesSection) => {
+    if (preferencesWindow && !preferencesWindow.isDestroyed()) {
+      // Reused rather than re-created: a hidden window re-shows instantly,
+      // where a fresh one re-parses the whole renderer bundle.
+      if (section) preferencesWindow.webContents.send('preferences:navigate', { section });
+      preferencesWindow.show();
+      preferencesWindow.focus();
+      return;
+    }
+    preferencesWindow = createPreferencesWindow(preloadPath(), coachWindow ?? undefined, section);
+    preferencesWindow.on('close', (event) => {
+      if (shuttingDown || !coachWindow || coachWindow.isDestroyed()) return;
+      event.preventDefault();
+      preferencesWindow?.hide();
+    });
+    preferencesWindow.on('closed', () => {
+      preferencesWindow = null;
+    });
+  };
+
   const services: AppServices = {
     settings,
     secrets,
@@ -120,15 +155,19 @@ async function bootstrap(): Promise<void> {
       totalMemoryMb: Math.round(os.totalmem() / (1024 * 1024)),
     }),
     broadcast,
-    openPreferencesWindow: () => {
-      if (preferencesWindow && !preferencesWindow.isDestroyed()) {
-        preferencesWindow.focus();
-        return;
-      }
-      preferencesWindow = createPreferencesWindow(preloadPath(), coachWindow ?? undefined);
-      preferencesWindow.on('closed', () => {
-        preferencesWindow = null;
-      });
+    openPreferencesWindow,
+    dockEyeLine: async () => {
+      const win = coachWindow;
+      if (!win || win.isDestroyed()) return;
+      if (win.isMinimized()) win.restore();
+      if (win.isMaximized()) win.unmaximize();
+      win.setBounds(eyeLineBoundsFor(win.getBounds()), true);
+      // Eye line only helps if the window stays above the call; persist it
+      // through the normal settings path so the Preferences switch agrees.
+      const updated = await settings.patch({ alwaysOnTop: true });
+      win.setAlwaysOnTop(true);
+      broadcast('settings:changed', updated);
+      win.focus();
     },
     applyWindowSettings: async () => {
       const s = await settings.get();
@@ -166,10 +205,30 @@ async function bootstrap(): Promise<void> {
 
   registerIpc(services);
 
-  const initial = await settings.get();
-  coachWindow = createCoachWindow(preloadPath(), initial.alwaysOnTop);
-  coachWindow.on('closed', () => {
+  const [initial, remembered] = await Promise.all([settings.get(), windowState.loadCoachBounds()]);
+  const win = createCoachWindow(preloadPath(), {
+    alwaysOnTop: initial.alwaysOnTop,
+    bounds: initialCoachBounds(remembered),
+  });
+  coachWindow = win;
+  const remember = () => {
+    if (!win.isDestroyed() && !win.isMinimized() && !win.isMaximized())
+      windowState.rememberCoachBounds(win.getBounds());
+  };
+  win.on('move', remember);
+  win.on('resize', remember);
+  win.on('close', () => {
+    shuttingDown = true;
+    void windowState.flush();
+  });
+  win.on('closed', () => {
     coachWindow = null;
+    if (preferencesWindow && !preferencesWindow.isDestroyed()) preferencesWindow.destroy();
+  });
+  win.once('ready-to-show', () => {
+    // Load the selected models while the user is reading the screen, not
+    // while they are waiting for the first answer. Never downloads.
+    if (initial.onboardingComplete) void coordinator.prewarm();
   });
 }
 
@@ -182,12 +241,19 @@ app.on('second-instance', () => {
 
 app.whenReady().then(bootstrap);
 
+app.on('before-quit', () => {
+  shuttingDown = true;
+});
+
 app.on('window-all-closed', () => {
   app.quit();
 });
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) void bootstrap();
+  if (BrowserWindow.getAllWindows().length === 0) {
+    shuttingDown = false;
+    void bootstrap();
+  }
 });
 
 app.on('web-contents-created', (_event, contents) => {

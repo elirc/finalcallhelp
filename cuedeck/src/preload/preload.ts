@@ -5,6 +5,7 @@ import type {
   HistoryItem,
   ModelSummary,
   OperationEvent,
+  PreferencesSection,
   Profile,
   ProviderMeta,
   ProviderProbe,
@@ -48,7 +49,11 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): () => vo
 
 const api = {
   getCapabilities: () => invoke<AppCapabilities>('app:getCapabilities'),
-  openPreferences: () => invoke<boolean>('app:openPreferences'),
+  /** Open (or focus) the preferences window, optionally on a given section. */
+  openPreferences: (section?: PreferencesSection) =>
+    invoke<boolean>('app:openPreferences', section ? { section } : undefined),
+  /** Move the coach window to the top-centre of its display and keep it on top. */
+  dockEyeLine: () => invoke<boolean>('app:dockEyeLine'),
   openExternal: (url: string) => invoke<boolean>('app:openExternal', { url }),
 
   getPublicSettings: () => invoke<PublicSettings>('settings:getPublic'),
@@ -61,7 +66,9 @@ const api = {
     invoke<{ hasCredential: boolean }>('secrets:remove', { providerId }),
 
   listProviders: () => invoke<ProviderMeta[]>('providers:list'),
-  probeProvider: (providerId: string) => invoke<ProviderProbe>('providers:probe', { providerId }),
+  /** `fresh` skips the short-lived probe cache (explicit re-check buttons). */
+  probeProvider: (providerId: string, fresh = false) =>
+    invoke<ProviderProbe>('providers:probe', { providerId, fresh }),
   testResponseProvider: (providerId: string) =>
     invoke<ProviderProbe>('providers:testResponse', { providerId }),
   listModels: (providerId: string) => invoke<ModelSummary[]>('models:list', { providerId }),
@@ -90,6 +97,8 @@ const api = {
     summary: string;
     roleContext: string;
     emphasisNotes: string;
+    callType?: Profile['callType'];
+    techStack?: string;
   }) => invoke<Profile>('profiles:save', profile),
   deleteProfile: (id: string) => invoke<{ deleted: boolean }>('profiles:delete', { id }),
 
@@ -103,6 +112,9 @@ const api = {
     subscribe<OperationEvent>('operation:event', callback),
   onSettingsChanged: (callback: (settings: PublicSettings) => void) =>
     subscribe<PublicSettings>('settings:changed', callback),
+  /** Fired at the preferences window when the coach deep-links a section. */
+  onPreferencesNavigate: (callback: (section: PreferencesSection) => void) =>
+    subscribe<{ section: PreferencesSection }>('preferences:navigate', (p) => callback(p.section)),
 };
 
 export type CueDeckApi = typeof api;

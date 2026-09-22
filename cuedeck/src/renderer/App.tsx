@@ -1,9 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useState } from 'react';
 import type { PublicSettings } from '../shared/domain';
 import { errorMessage } from '../shared/setup';
 import { Coach } from './routes/Coach';
-import { Onboarding } from './routes/Onboarding';
-import { Preferences } from './routes/Preferences';
+
+// The coach window never renders these after first run, and the preferences
+// window never renders the coach: code-splitting keeps each window's initial
+// parse to what it actually shows.
+const Onboarding = React.lazy(() =>
+  import('./routes/Onboarding').then((m) => ({ default: m.Onboarding })),
+);
+const Preferences = React.lazy(() =>
+  import('./routes/Preferences').then((m) => ({ default: m.Preferences })),
+);
 
 function useHashRoute(): string {
   const [route, setRoute] = useState(() => window.location.hash.replace(/^#/, '') || '/');
@@ -25,9 +33,11 @@ export function App(): React.JSX.Element {
     document.documentElement.style.setProperty('--font-scale', String(s.fontScale));
   };
 
-  const refresh = async () => {
+  // Stable identity: child effects depend on this callback, and a new
+  // function every render would re-run them (and their IPC calls) each time.
+  const refresh = useCallback(async () => {
     applySettings(await window.cuedeck.getPublicSettings());
-  };
+  }, []);
 
   useEffect(() => {
     const onRejection = (event: PromiseRejectionEvent) => {
@@ -47,7 +57,11 @@ export function App(): React.JSX.Element {
       unsubscribe();
       window.removeEventListener('unhandledrejection', onRejection);
     };
-  }, []);
+  }, [refresh]);
+
+  const loading = (
+    <div className="onboarding">{error ? 'Unable to load CueDeck.' : 'Loading…'}</div>
+  );
 
   return (
     <>
@@ -66,11 +80,19 @@ export function App(): React.JSX.Element {
         </div>
       )}
       {!settings ? (
-        <div className="onboarding">{error ? 'Unable to load CueDeck.' : 'Loading…'}</div>
+        loading
       ) : route.startsWith('/preferences') ? (
-        <Preferences settings={settings} onSettingsChanged={refresh} />
+        <Suspense fallback={loading}>
+          <Preferences
+            settings={settings}
+            onSettingsChanged={refresh}
+            initialSection={route.split('/')[2]}
+          />
+        </Suspense>
       ) : !settings.onboardingComplete ? (
-        <Onboarding settings={settings} onSettingsChanged={refresh} />
+        <Suspense fallback={loading}>
+          <Onboarding settings={settings} onSettingsChanged={refresh} />
+        </Suspense>
       ) : (
         <Coach settings={settings} onSettingsChanged={refresh} />
       )}

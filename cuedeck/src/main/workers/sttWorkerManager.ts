@@ -27,11 +27,14 @@ interface Manifest {
  * Cancellation kills the process (which aborts any in-flight download or
  * inference) and the next request respawns it.
  */
+const INSTALLED_CACHE_MS = 10_000;
+
 export class SttWorkerManager {
   private worker: UtilityProcess | null = null;
   private loadedModelId: string | null = null;
   private nextRequestId = 1;
   private status: 'idle' | 'loading' | 'ready' = 'idle';
+  private readonly installedCache = new Map<string, { value: boolean; expiresAt: number }>();
 
   constructor(
     private readonly workerPath: string,
@@ -48,7 +51,20 @@ export class SttWorkerManager {
     return raw;
   }
 
+  /**
+   * Installed check = manifest read + one stat per model file. Readiness
+   * probes call this for every catalog model, several times per settings
+   * change, so results are memoized briefly; installs and removals clear it.
+   */
   async isInstalled(modelId: string): Promise<boolean> {
+    const cached = this.installedCache.get(modelId);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    const value = await this.checkInstalled(modelId);
+    this.installedCache.set(modelId, { value, expiresAt: Date.now() + INSTALLED_CACHE_MS });
+    return value;
+  }
+
+  private async checkInstalled(modelId: string): Promise<boolean> {
     const manifest = await this.readManifest();
     const entry = manifest.models.find((m) => m.modelId === modelId);
     if (!entry || !Array.isArray(entry.files) || entry.files.length === 0) return false;
@@ -65,6 +81,7 @@ export class SttWorkerManager {
   }
 
   async removeModel(modelId: string): Promise<void> {
+    this.installedCache.delete(modelId);
     const manifest = await this.readManifest();
     manifest.models = manifest.models.filter((m) => m.modelId !== modelId);
     await writeJsonFile(this.manifestPath, manifest);
@@ -195,6 +212,7 @@ export class SttWorkerManager {
     manifest.models = manifest.models.filter((m) => m.modelId !== modelId);
     manifest.models.push({ modelId, installedAt: new Date().toISOString(), files });
     await writeJsonFile(this.manifestPath, manifest);
+    this.installedCache.delete(modelId);
   }
 
   /**
