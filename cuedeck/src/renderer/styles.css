@@ -236,7 +236,8 @@ a {
   text-overflow: ellipsis;
 }
 
-/* One-line readiness notice for the eye-line layout. */
+/* One-line readiness notice: eye-line layout, and below the answer when
+   typed questions work but Listen does not. */
 .setup-slim {
   display: flex;
   align-items: center;

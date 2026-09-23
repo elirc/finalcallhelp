@@ -49,6 +49,8 @@ const FONT_SCALE_MAX = 1.6;
  * Coach window. Layout order is deliberate: title bar, capture controls,
  * then the response card at the top of the scrolling area, so the answer
  * sits at the top of a window that docks at eye line under the camera.
+ * Only blocking setup states (demo, checking, no response provider) sit
+ * above it; the "Listen is off" notice for typed-only setups goes below.
  * Everything below the response is setup or practice and hides in the
  * compact (eye-line) layout.
  */
@@ -82,6 +84,14 @@ export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element
         : '';
 
   const setup = () => void update({ onboardingComplete: false });
+  const banner = {
+    settings,
+    readiness,
+    busy,
+    compact,
+    onSetup: setup,
+    onSettingsChanged,
+  };
   const changeFontScale = (delta: number) => {
     const next = Math.round((settings.fontScale + delta) * 100) / 100;
     void update({ fontScale: Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, next)) });
@@ -141,14 +151,7 @@ export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element
       />
 
       <main className="coach-body">
-        <SetupBanner
-          settings={settings}
-          readiness={readiness}
-          busy={busy}
-          compact={compact}
-          onSetup={setup}
-          onSettingsChanged={onSettingsChanged}
-        />
+        <SetupBanner {...banner} placement="above" />
 
         {state.error && (
           <div className="error-banner" role="alert" data-testid="error-banner">
@@ -186,6 +189,8 @@ export function Coach({ settings, onSettingsChanged }: Props): React.JSX.Element
           onFollowUp={(overrides) => void session.regenerate(overrides)}
           onFontScale={changeFontScale}
         />
+
+        <SetupBanner {...banner} placement="below" />
 
         {!compact && (
           <TranscriptCard

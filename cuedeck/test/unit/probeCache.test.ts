@@ -70,4 +70,59 @@ describe('ProbeCache', () => {
     await cache.get('b', fetcher('ready'));
     expect(calls()).toBe(2);
   });
+
+  it('an invalidated in-flight probe never populates the cache', async () => {
+    const { cache, fetcher, calls } = makeCache();
+    let resolveOld: (p: Probe) => void = () => undefined;
+    const old = cache.get(
+      'a',
+      () =>
+        new Promise<Probe>((r) => {
+          resolveOld = r;
+        }),
+    );
+    cache.invalidate();
+    const second = await cache.get('a', fetcher('ready'));
+    expect(calls()).toBe(1);
+    expect(second).toEqual({ status: 'ready', n: 1 });
+    resolveOld({ status: 'missing-credential', n: 99 });
+    expect(await old).toEqual({ status: 'missing-credential', n: 99 });
+    expect(await cache.get('a', fetcher('ready'))).toEqual({ status: 'ready', n: 1 });
+    expect(calls()).toBe(1);
+  });
+
+  it('fetches again after invalidate even while the old request is pending', async () => {
+    const { cache, fetcher, calls } = makeCache();
+    let resolveOld: (p: Probe) => void = () => undefined;
+    const old = cache.get(
+      'a',
+      () =>
+        new Promise<Probe>((r) => {
+          resolveOld = r;
+        }),
+    );
+    cache.invalidate();
+    const next = await cache.get('a', fetcher('ready'));
+    expect(calls()).toBe(1);
+    expect(next.n).toBe(1);
+    resolveOld({ status: 'unreachable', n: 0 });
+    await old;
+  });
+
+  it('invalidating one prefix leaves other in-flight probes joinable', async () => {
+    const { cache, fetcher, calls } = makeCache();
+    let resolveOllama: (p: Probe) => void = () => undefined;
+    const first = cache.get(
+      'ollama|url',
+      () =>
+        new Promise<Probe>((r) => {
+          resolveOllama = r;
+        }),
+    );
+    cache.invalidate('local-whisper');
+    const second = cache.get('ollama|url', fetcher('ready'));
+    resolveOllama({ status: 'ready', n: 7 });
+    expect(await second).toEqual(await first);
+    expect(calls()).toBe(0);
+  });
 });

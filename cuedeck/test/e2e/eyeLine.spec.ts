@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type * as Electron from 'electron';
+import { questionsForCategory } from '../../src/shared/practice';
 import { launchApp, READY_SETTINGS, startFakeOllama } from './helpers';
 
 /**
@@ -180,6 +181,66 @@ test('switching the active profile from the coach changes the prompt and the pra
     await expect(page.getByTestId('answer-text')).toContainText('constraints');
     await page.evaluate(() => document.querySelector('.coach-body')?.scrollTo(0, 0));
     await page.screenshot({ path: 'test-results/guide-coach-eyeline.png' });
+  } finally {
+    await app.close();
+    await ollama.close();
+  }
+});
+
+test('a practice category chosen by the user survives draws and profile switches', async () => {
+  const ollama = await startFakeOllama({ deltas: ['Unused.'] });
+  const { app } = await launchApp({
+    seedSettings: { ...READY_SETTINGS, ollamaBaseUrl: ollama.baseUrl },
+  });
+  try {
+    const page = await app.firstWindow();
+    await page.evaluate(async () => {
+      await window.cuedeck.saveProfile({
+        name: 'Backend interviews',
+        summary: 'Go engineer, 5 years.',
+        roleContext: '',
+        emphasisNotes: '',
+        callType: 'technical-interview',
+        techStack: 'Go, Postgres, Kafka',
+      });
+      await window.cuedeck.saveProfile({
+        name: 'Sales demos',
+        summary: 'Account executive.',
+        roleContext: '',
+        emphasisNotes: '',
+        callType: 'sales-call',
+        techStack: '',
+      });
+      window.dispatchEvent(new Event('focus'));
+    });
+    const switcher = page.getByTestId('profile-switcher');
+    await expect(switcher.locator('option')).toHaveCount(3);
+    const backend = await switcher
+      .locator('option', { hasText: 'Backend interviews' })
+      .getAttribute('value');
+    await switcher.selectOption(backend as string);
+    const category = page.getByTestId('practice-category');
+    await expect(category).toHaveValue('technical');
+
+    await page.getByTestId('practice-draw').click();
+    await expect(page.getByTestId('practice-progress')).toBeVisible();
+    await category.selectOption('behavioral');
+    await expect(category).toHaveValue('behavioral');
+    // Give the old "adopt the suggestion" effect a chance to snap back.
+    await page.waitForTimeout(300);
+    await expect(category).toHaveValue('behavioral');
+
+    await page.getByTestId('practice-draw').click();
+    const behavioral = questionsForCategory('behavioral').map((q) => q.text);
+    await expect(page.getByTestId('practice-progress')).toContainText(`1 of ${behavioral.length}`);
+    expect(behavioral).toContain(await page.getByTestId('transcript-input').inputValue());
+
+    const sales = await switcher
+      .locator('option', { hasText: 'Sales demos' })
+      .getAttribute('value');
+    await switcher.selectOption(sales as string);
+    await expect(page.getByTestId('status-profile')).toContainText('Sales');
+    await expect(category).toHaveValue('behavioral');
   } finally {
     await app.close();
     await ollama.close();

@@ -11,20 +11,36 @@ export function PracticeCard({
   onQuestion,
 }: {
   disabled: boolean;
-  /** From the active profile's call type; adopted until the user deals a card. */
+  /** From the active profile's call type; followed until the user picks a category. */
   suggestedCategory: PracticeCategory | 'all';
   onQuestion: (text: string) => void;
 }): React.JSX.Element {
-  const [category, setCategory] = useState<PracticeCategory | 'all'>(suggestedCategory);
+  // `explicit` records a category the user chose; after that, profile
+  // switches no longer override it.
+  const [choice, setChoice] = useState<{
+    category: PracticeCategory | 'all';
+    explicit: boolean;
+  }>({ category: suggestedCategory, explicit: false });
+  const category = choice.category;
   const deckRef = useRef<PracticeDeck | null>(null);
   const [dealtCount, setDealtCount] = useState(0);
 
   useEffect(() => {
-    if (dealtCount === 0) setCategory(suggestedCategory);
-  }, [suggestedCategory, dealtCount]);
+    setChoice((prev) =>
+      prev.explicit || prev.category === suggestedCategory
+        ? prev
+        : { category: suggestedCategory, explicit: false },
+    );
+  }, [suggestedCategory]);
+
+  // A category that followed the profile reshuffles like a chosen one.
+  useEffect(() => {
+    deckRef.current = null;
+    setDealtCount(0);
+  }, [category]);
 
   const changeCategory = (next: PracticeCategory | 'all') => {
-    setCategory(next);
+    setChoice({ category: next, explicit: true });
     deckRef.current = null;
     setDealtCount(0);
   };

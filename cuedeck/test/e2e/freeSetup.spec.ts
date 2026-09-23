@@ -57,11 +57,21 @@ test('typed questions work with Ollama while speech model setup is incomplete', 
   });
   try {
     const page = await app.firstWindow();
-    await expect(page.getByTestId('readiness-banner')).toContainText('Ready for typed questions');
+    const banner = page.getByTestId('readiness-banner');
+    await expect(banner).toContainText(/Listen is off/);
     await expect(page.getByTestId('listen-button')).toBeDisabled();
     await page.getByTestId('transcript-input').fill('How would you approach this?');
     await page.getByTestId('regenerate-button').click();
     await expect(page.getByTestId('answer-text')).toContainText('A real provider response.');
+    // The answer keeps the top of the window; the notice sits under it.
+    await expect(banner).toBeVisible();
+    const top = async (testId: string) =>
+      (await page.getByTestId(testId).boundingBox())?.y ?? Number.NaN;
+    const answerTop = await top('answer-text');
+    const bannerTop = await top('readiness-banner');
+    const transcriptTop = await top('transcript-input');
+    expect(answerTop).toBeLessThan(bannerTop);
+    expect(bannerTop).toBeLessThan(transcriptTop);
   } finally {
     await app.close();
     await server.close();
