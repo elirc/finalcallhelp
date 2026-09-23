@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { CLOUD_MODELS, LOCAL_STT_MODELS, PROVIDERS } from '../../src/shared/catalog';
+import {
+  CLOUD_MODELS,
+  DEFAULT_PROVIDER_MODELS,
+  LOCAL_STT_MODELS,
+  PROVIDERS,
+} from '../../src/shared/catalog';
 import { DEFAULT_SETTINGS } from '../../src/shared/constants';
 import { isAllowedExternalUrl } from '../../src/main/security/urlPolicy';
 import { isAllowedUrl } from '../../src/main/security/http';
@@ -9,6 +14,20 @@ import { GROQ_DEFAULT_BASE_URL } from '../../src/main/providers/llm/groq';
 import { OPENROUTER_DEFAULT_BASE_URL } from '../../src/main/providers/llm/openRouter';
 
 describe('provider catalog invariants', () => {
+  it('defaults local speech to the one recommended model, matching the settings default', () => {
+    const recommended = LOCAL_STT_MODELS.filter((model) => model.recommended);
+    expect(recommended).toHaveLength(1);
+    expect(recommended[0].id).toBe('onnx-community/whisper-base');
+    expect(DEFAULT_PROVIDER_MODELS['local-whisper']).toBe(recommended[0].id);
+    expect(DEFAULT_PROVIDER_MODELS['local-whisper']).toBe(DEFAULT_SETTINGS.sttModelId);
+    // Display order stays smallest to largest.
+    expect(LOCAL_STT_MODELS.map((model) => model.id)).toEqual([
+      'onnx-community/whisper-tiny',
+      'onnx-community/whisper-base',
+      'onnx-community/whisper-small',
+    ]);
+  });
+
   it('keys the registry by each provider id', () => {
     for (const [key, meta] of Object.entries(PROVIDERS)) {
       expect(meta.id, key).toBe(key);

@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CLOUD_MODELS } from '../../src/shared/catalog';
+import { setupPreset } from '../../src/shared/setup';
 import {
   installGroqFixture,
   launchGroq,
@@ -365,6 +366,53 @@ test('removing a Groq key updates readiness in the coach immediately', async () 
     expect(saved.credentials.groq).toBeUndefined();
     expect(saved.targetSeconds).toBe(15);
     expect(saved.sttLanguage).toBe('es');
+  } finally {
+    await app.close();
+  }
+});
+
+test('replacing a rejected Groq key refreshes coach readiness without Check again', async () => {
+  const { app } = await launchApp({ seedSettings: { ...READY_SETTINGS, ...setupPreset('groq') } });
+  try {
+    await installGroqFixture(app);
+    await app.evaluate(() => {
+      globalThis.__groqFixture.status = 401;
+    });
+    const page = await app.firstWindow();
+    await page.evaluate(() => window.cuedeck.setSecret('groq', 'gsk_synthetic_bad_key'));
+    await expect(page.getByTestId('readiness-banner')).toContainText(/rejected/i, {
+      timeout: 10_000,
+    });
+    await expect(page.getByTestId('listen-button')).toBeDisabled();
+    await app.evaluate(() => {
+      globalThis.__groqFixture.status = 200;
+    });
+    // The credential flag is already true, so only the readiness push can
+    // tell the coach that the replacement key needs a fresh probe.
+    await page.evaluate(() => window.cuedeck.setSecret('groq', 'gsk_synthetic_good_key'));
+    await expect(page.getByTestId('listen-button')).toBeEnabled({ timeout: 10_000 });
+  } finally {
+    await app.close();
+  }
+});
+
+test('the first Check again after a provider recovers bypasses the cached failure', async () => {
+  const { app } = await launchApp({ seedSettings: { ...READY_SETTINGS, ...setupPreset('groq') } });
+  try {
+    await installGroqFixture(app);
+    await app.evaluate(() => {
+      globalThis.__groqFixture.status = 500;
+    });
+    const page = await app.firstWindow();
+    await page.evaluate(() => window.cuedeck.setSecret('groq', 'gsk_synthetic_key'));
+    await expect(page.getByTestId('readiness-banner')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('listen-button')).toBeDisabled();
+    await app.evaluate(() => {
+      globalThis.__groqFixture.status = 200;
+    });
+    // Inside the 5 s failure TTL: a cached probe would repeat the 500.
+    await page.getByRole('button', { name: 'Check again' }).click();
+    await expect(page.getByTestId('listen-button')).toBeEnabled({ timeout: 10_000 });
   } finally {
     await app.close();
   }

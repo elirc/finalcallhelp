@@ -20,6 +20,10 @@ interface Harness {
   coordinator: SessionCoordinator;
   events: SessionEvent[];
   history: unknown[];
+  /** Retention passed to each saveHistory call. */
+  retentions: number[];
+  /** Live settings: tests may change these while a session runs. */
+  settings: { historyEnabled: boolean; historyRetentionDays: number };
 }
 
 function makeHarness(overrides: {
@@ -51,6 +55,8 @@ function makeHarness(overrides: {
   registry.registerLlm(llm);
   const events: SessionEvent[] = [];
   const history: unknown[] = [];
+  const retentions: number[] = [];
+  const settings = { historyEnabled: overrides.historyEnabled ?? false, historyRetentionDays: 7 };
   const deps: CoordinatorDeps = {
     registry,
     getSettings: async () => ({
@@ -59,19 +65,20 @@ function makeHarness(overrides: {
       sttLanguage: 'auto',
       llmProviderId: 'ollama',
       llmModelId: 'test-llm',
-      historyEnabled: overrides.historyEnabled ?? false,
-      historyRetentionDays: 7,
+      historyEnabled: settings.historyEnabled,
+      historyRetentionDays: settings.historyRetentionDays,
       maxClipSeconds: 90,
       activeProfileId: undefined,
     }),
     getProfile: async () => null,
-    saveHistory: async (item) => {
+    saveHistory: async (item, retentionDays) => {
       history.push(item);
+      retentions.push(retentionDays);
     },
     emit: (event) => events.push(event),
     recordError: () => undefined,
   };
-  return { coordinator: new SessionCoordinator(deps), events, history };
+  return { coordinator: new SessionCoordinator(deps), events, history, retentions, settings };
 }
 
 describe('session pipeline', () => {
@@ -314,5 +321,41 @@ describe('session pipeline', () => {
     const on = makeHarness({ historyEnabled: true });
     await on.coordinator.submit(SID, sineWav(2), OPTIONS, 5);
     expect(on.history).toHaveLength(1);
+  });
+
+  it('honours a history opt-out made while the answer streams', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    async function* generate(): AsyncIterable<AnswerDelta> {
+      yield { text: 'First part, ', sequence: 0 };
+      await gate;
+      yield { text: 'second part.', sequence: 1 };
+    }
+    const h = makeHarness({ generate, historyEnabled: true });
+    const run = h.coordinator.regenerate(SID, 'Tell me about an incident.', OPTIONS);
+    await new Promise((r) => setTimeout(r, 20));
+    h.settings.historyEnabled = false;
+    release();
+    await run;
+    expect(h.events.some((e) => e.type === 'answer-complete')).toBe(true);
+    expect(h.history).toHaveLength(0);
+  });
+
+  it('uses the retention in effect when the answer is saved', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    async function* generate(): AsyncIterable<AnswerDelta> {
+      yield { text: 'First part, ', sequence: 0 };
+      await gate;
+      yield { text: 'second part.', sequence: 1 };
+    }
+    const h = makeHarness({ generate, historyEnabled: true });
+    const run = h.coordinator.regenerate(SID, 'Tell me about an incident.', OPTIONS);
+    await new Promise((r) => setTimeout(r, 20));
+    h.settings.historyRetentionDays = 1;
+    release();
+    await run;
+    expect(h.history).toHaveLength(1);
+    expect(h.retentions).toEqual([1]);
   });
 });

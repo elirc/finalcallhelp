@@ -202,10 +202,12 @@ function LocalSetupStep({
   } | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
-  const probeAll = async () => {
+  // `fresh` bypasses the main-process probe cache: an explicit re-check must
+  // not repeat a cached failure.
+  const probeAll = async (fresh = false) => {
     const [stt, ollama] = await Promise.all([
-      window.cuedeck.probeProvider('local-whisper'),
-      window.cuedeck.probeProvider('ollama'),
+      window.cuedeck.probeProvider('local-whisper', fresh),
+      window.cuedeck.probeProvider('ollama', fresh),
     ]);
     setSttProbe(stt);
     setOllamaProbe(ollama);
@@ -222,7 +224,7 @@ function LocalSetupStep({
         if (event.type === 'progress')
           return { ...current, value: event.value, detail: event.detail };
         if (event.type === 'complete') {
-          void probeAll();
+          void probeAll(true);
           return null;
         }
         if (event.type === 'error') {
@@ -352,7 +354,7 @@ function LocalSetupStep({
               >
                 Get Ollama
               </button>
-              <button onClick={() => void probeAll()}>Check again</button>
+              <button onClick={() => void probeAll(true)}>Check again</button>
             </div>
           </>
         )}

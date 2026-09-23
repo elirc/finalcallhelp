@@ -132,7 +132,7 @@ export class SttWorkerManager {
   ): Promise<void> {
     if (this.loadedModelId === modelId && this.status === 'ready') return;
     // 'abort' does not fire for an already-aborted signal, so check first.
-    if (signal.aborted) throw new DOMException('aborted', 'AbortError');
+    if (signal.aborted) throw signal.reason ?? new DOMException('aborted', 'AbortError');
     this.stop();
     const worker = this.spawn();
     this.status = 'loading';
@@ -141,7 +141,7 @@ export class SttWorkerManager {
       await new Promise<void>((resolve, reject) => {
         const onAbort = () => {
           cleanup();
-          reject(new DOMException('aborted', 'AbortError'));
+          reject(signal.reason ?? new DOMException('aborted', 'AbortError'));
         };
         const onMessage = (event: { data?: unknown } | unknown) => {
           const msg = ((event as { data?: unknown }).data ?? event) as Record<string, unknown>;
@@ -171,7 +171,7 @@ export class SttWorkerManager {
           worker.removeListener('exit', onExit);
         };
         if (signal.aborted) {
-          reject(new DOMException('aborted', 'AbortError'));
+          reject(signal.reason ?? new DOMException('aborted', 'AbortError'));
           return;
         }
         signal.addEventListener('abort', onAbort, { once: true });
@@ -236,7 +236,7 @@ export class SttWorkerManager {
         cleanup();
         // Only kill our own worker; a newer request may have replaced it.
         if (this.worker === worker) this.stop();
-        reject(new DOMException('aborted', 'AbortError'));
+        reject(input.signal.reason ?? new DOMException('aborted', 'AbortError'));
       };
       const onMessage = (event: { data?: unknown } | unknown) => {
         const msg = ((event as { data?: unknown }).data ?? event) as Record<string, unknown>;
@@ -265,7 +265,7 @@ export class SttWorkerManager {
       // 'abort' does not fire for an already-aborted signal, so check first;
       // otherwise a pre-cancelled session would run a full inference.
       if (input.signal.aborted) {
-        reject(new DOMException('aborted', 'AbortError'));
+        reject(input.signal.reason ?? new DOMException('aborted', 'AbortError'));
         return;
       }
       input.signal.addEventListener('abort', onAbort, { once: true });

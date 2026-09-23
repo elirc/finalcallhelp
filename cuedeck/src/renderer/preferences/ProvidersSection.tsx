@@ -48,6 +48,20 @@ export function ProvidersSection({ settings, onSettingsChanged }: SectionProps):
   }, []);
   const loadLocalModels = useCallback(() => void loadModels('local-whisper'), [loadModels]);
 
+  // Switching back to local speech keeps a model that is already installed
+  // (the recommended one first), so Listen does not turn off for a download.
+  const selectSttProvider = async (providerId: string) => {
+    let sttModelId = DEFAULT_PROVIDER_MODELS[providerId];
+    if (providerId === 'local-whisper') {
+      const local =
+        models['local-whisper'] ??
+        (await window.cuedeck.listModels('local-whisper').catch(() => [] as ModelSummary[]));
+      const installed = local.filter((m) => m.installed);
+      sttModelId = (installed.find((m) => m.id === sttModelId) ?? installed[0])?.id ?? sttModelId;
+    }
+    await update({ sttProviderId: providerId, sttModelId });
+  };
+
   const sttProviders = providers.filter((p) => p.kind === 'stt');
   const llmProviders = providers.filter((p) => p.kind === 'llm');
   // One key section per cloud account, derived from provider metadata so a
@@ -101,12 +115,7 @@ export function ProvidersSection({ settings, onSettingsChanged }: SectionProps):
           <span>Provider</span>
           <select
             value={settings.sttProviderId}
-            onChange={(e) =>
-              void update({
-                sttProviderId: e.target.value,
-                sttModelId: DEFAULT_PROVIDER_MODELS[e.target.value],
-              })
-            }
+            onChange={(e) => void selectSttProvider(e.target.value)}
           >
             {sttProviders.map((p) => (
               <option key={p.id} value={p.id} disabled={needsKey(p)}>

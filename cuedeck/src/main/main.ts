@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, safeStorage, session } from 'electron';
+import { app, BrowserWindow, desktopCapturer, Menu, safeStorage, session } from 'electron';
 import os from 'node:os';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
@@ -6,6 +6,7 @@ import type {
   OperationEvent,
   PreferencesSection,
   PublicSettings,
+  ReadinessChange,
   SessionEvent,
 } from '../shared/domain';
 import { Diagnostics } from './diagnostics';
@@ -33,6 +34,7 @@ import {
   eyeLineBoundsFor,
   initialCoachBounds,
 } from './windows/windows';
+import { menuTemplate } from './windows/menu';
 import { WindowStateStore } from './windows/windowState';
 import { SttWorkerManager } from './workers/sttWorkerManager';
 
@@ -61,8 +63,8 @@ function preloadPath(): string {
 }
 
 function broadcast(
-  channel: 'session:event' | 'operation:event' | 'settings:changed',
-  payload: SessionEvent | OperationEvent | PublicSettings,
+  channel: 'session:event' | 'operation:event' | 'settings:changed' | 'readiness:changed',
+  payload: SessionEvent | OperationEvent | PublicSettings | ReadinessChange,
 ): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
@@ -177,7 +179,12 @@ async function bootstrap(): Promise<void> {
     },
   };
 
-  hardenSession();
+  hardenSession(captureGrant);
+
+  // No default application menu in packaged builds (its Reload, Close, Full
+  // Screen and DevTools accelerators stay live with the bar hidden).
+  const template = menuTemplate(app.isPackaged);
+  Menu.setApplicationMenu(template ? Menu.buildFromTemplate(template) : null);
 
   // Armed, one-use display-media grant (spec §5.2-E). Every request that
   // does not follow an explicit `capture:arm` from a trusted frame within

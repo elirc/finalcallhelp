@@ -163,6 +163,11 @@ export type OperationEvent =
   | { type: 'complete'; operationId: string }
   | { type: 'error'; operationId: string; error: PublicError };
 
+/** Pushed when something outside settings changes whether a provider is ready. */
+export interface ReadinessChange {
+  reason: 'credential-set' | 'credential-removed' | 'model-installed' | 'model-removed';
+}
+
 /** User background fed into prompts as untrusted reference data.
  *  `createdAt`/`updatedAt` are ISO 8601 strings. */
 export interface Profile {

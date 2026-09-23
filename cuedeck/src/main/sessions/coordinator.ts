@@ -347,7 +347,10 @@ export class SessionCoordinator {
     // spurious 'ready' after 'answer-complete'.
     if (this.active === context) this.active = null;
 
-    if (settings.historyEnabled) {
+    // Re-read settings: the user may have turned history off (or changed the
+    // retention) while the answer streamed, and the opt-out must win.
+    const latest = await this.deps.getSettings().catch(() => settings);
+    if (latest.historyEnabled) {
       await this.deps
         .saveHistory(
           {
@@ -365,7 +368,7 @@ export class SessionCoordinator {
               totalMs: metrics.totalMs,
             },
           },
-          settings.historyRetentionDays,
+          latest.historyRetentionDays,
         )
         .catch(() => undefined); // history failure must not fail the session
     }

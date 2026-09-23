@@ -249,7 +249,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
 export function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
-      reject(new DOMException('aborted', 'AbortError'));
+      reject(signal.reason ?? new DOMException('aborted', 'AbortError'));
       return;
     }
     const timer = setTimeout(() => {
@@ -258,7 +258,7 @@ export function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new DOMException('aborted', 'AbortError'));
+      reject(signal.reason ?? new DOMException('aborted', 'AbortError'));
     };
     signal.addEventListener('abort', onAbort, { once: true });
   });

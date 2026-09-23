@@ -45,20 +45,27 @@ export function hardenWebContents(win: BrowserWindow): void {
   win.webContents.on('will-attach-webview', (event) => event.preventDefault());
 }
 
-export function hardenSession(): void {
+export function hardenSession(captureGrant: { isArmed(): boolean }): void {
   const ses = session.defaultSession;
 
-  // Deny every permission the app does not use. Media (for the armed
-  // display-media flow) and sanitized clipboard *writes* (the Copy button)
-  // are the only grants, and only for trusted frames.
-  const allowed = new Set(['media', 'clipboard-sanitized-write']);
+  // Deny every permission the app does not use, and everything for untrusted
+  // frames. Sanitized clipboard *writes* (the Copy button) are always allowed.
+  // Media is needed by the armed display-media flow (Electron checks it before
+  // the display-media handler consumes the grant), so it is allowed only while
+  // a capture grant is armed; otherwise getUserMedia would reach the
+  // microphone at any time.
+  const permitted = (contents: WebContents | null, permission: string): boolean => {
+    if (!isTrustedSender(contents)) return false;
+    if (permission === 'clipboard-sanitized-write') return true;
+    if (permission === 'media') return captureGrant.isArmed();
+    return false;
+  };
   ses.setPermissionRequestHandler((webContents, permission, callback) => {
-    const trusted = isTrustedSender(webContents);
-    callback(trusted && allowed.has(permission));
+    callback(permitted(webContents, permission));
   });
-  ses.setPermissionCheckHandler((webContents, permission) => {
-    return isTrustedSender(webContents ?? null) && allowed.has(permission);
-  });
+  ses.setPermissionCheckHandler((webContents, permission) =>
+    permitted(webContents ?? null, permission),
+  );
 
   // CSP header on every response we serve. Dev needs the Vite client
   // (inline bootstrap + websocket); packaged builds get the strict policy.

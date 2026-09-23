@@ -96,7 +96,7 @@ There are five places a channel exists, and all five must agree. Using an imagin
 
 5. **Renderer** — call `window.cuedeck.saveNote(...)`. Rejections arrive as `PublicError` objects (`{ code, message, retryable, action? }`), already unwrapped by the preload's `invoke` helper; handle them like `src/renderer/coach/useCoachSession.ts`'s `asPublicError` does.
 
-Events flowing main → renderer are a separate, deliberately narrow path: there are exactly two broadcast channels, `session:event` and `operation:event` (`broadcast` in `src/main/main.ts`, `onSessionEvent`/`onOperationEvent` in the preload). Prefer adding a variant to `SessionEvent`/`OperationEvent` in `src/shared/domain.ts` over inventing a third channel.
+Events flowing main → renderer are a separate, deliberately narrow path: there are exactly four broadcast channels, `session:event`, `operation:event`, `settings:changed` and `readiness:changed` (`broadcast` in `src/main/main.ts`; `onSessionEvent`, `onOperationEvent`, `onSettingsChanged` and `onReadinessChanged` in the preload). `readiness:changed` carries a `ReadinessChange` (`{ reason }`) and is sent when a key is saved or removed or a local model finishes downloading; `useReadiness` answers it with a fresh probe that bypasses the probe cache. Prefer adding a variant to an existing event type in `src/shared/domain.ts` over inventing another channel.
 
 ## Adding a renderer route
 

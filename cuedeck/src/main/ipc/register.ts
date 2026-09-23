@@ -6,6 +6,7 @@ import type {
   PreferencesSection,
   ProviderProbe,
   PublicSettings,
+  ReadinessChange,
   SessionEvent,
 } from '../../shared/domain';
 import { LOCAL_STT_MODELS, PROVIDERS } from '../../shared/catalog';
@@ -56,8 +57,8 @@ export interface AppServices {
   sttWorkers: SttWorkerManager;
   capabilities: () => AppCapabilities;
   broadcast: (
-    channel: 'session:event' | 'operation:event' | 'settings:changed',
-    payload: SessionEvent | OperationEvent | PublicSettings,
+    channel: 'session:event' | 'operation:event' | 'settings:changed' | 'readiness:changed',
+    payload: SessionEvent | OperationEvent | PublicSettings | ReadinessChange,
   ) => void;
   openPreferencesWindow: (section?: PreferencesSection) => void;
   /** Move the coach window to eye line (top-centre) and pin it on top. */
@@ -150,6 +151,7 @@ export function registerIpc(services: AppServices): void {
       'settings:changed',
       await services.settings.setCredentialFlag(providerId, true),
     );
+    services.broadcast('readiness:changed', { reason: 'credential-set' });
     return { hasCredential: true };
   });
 
@@ -161,6 +163,7 @@ export function registerIpc(services: AppServices): void {
       'settings:changed',
       await services.settings.setCredentialFlag(providerId, false),
     );
+    services.broadcast('readiness:changed', { reason: 'credential-removed' });
     return { hasCredential: false };
   });
 
@@ -239,6 +242,7 @@ export function registerIpc(services: AppServices): void {
       )
       .then(() => {
         probeCache.invalidate('local-whisper');
+        services.broadcast('readiness:changed', { reason: 'model-installed' });
         services.broadcast('operation:event', { type: 'complete', operationId });
       })
       .catch((err: unknown) => {

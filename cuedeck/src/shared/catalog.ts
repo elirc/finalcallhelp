@@ -108,6 +108,8 @@ export interface CatalogModel {
   /** Approximate download size for local models. */
   sizeBytes?: number;
   license?: string;
+  /** The model new local setups pick; exactly one local model sets it. */
+  recommended?: boolean;
 }
 
 /** Local Whisper-compatible ONNX models runnable by Transformers.js. */
@@ -125,6 +127,7 @@ export const LOCAL_STT_MODELS: CatalogModel[] = [
     providerId: 'local-whisper',
     sizeBytes: 200_000_000,
     license: 'MIT (OpenAI Whisper weights, ONNX conversion)',
+    recommended: true,
   },
   {
     id: 'onnx-community/whisper-small',
@@ -152,7 +155,7 @@ export const PROVIDER_KEY_URLS: Record<string, string> = {
 };
 
 export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
-  'local-whisper': LOCAL_STT_MODELS[0].id,
+  'local-whisper': (LOCAL_STT_MODELS.find((model) => model.recommended) ?? LOCAL_STT_MODELS[0]).id,
   'groq-whisper': CLOUD_MODELS.groqSttModel,
   'gemini-audio': CLOUD_MODELS.geminiModel,
   ollama: '',

@@ -10,6 +10,7 @@ import type {
   ProviderMeta,
   ProviderProbe,
   PublicSettings,
+  ReadinessChange,
   SessionEvent,
   SessionOptions,
 } from '../shared/domain';
@@ -112,6 +113,9 @@ const api = {
     subscribe<OperationEvent>('operation:event', callback),
   onSettingsChanged: (callback: (settings: PublicSettings) => void) =>
     subscribe<PublicSettings>('settings:changed', callback),
+  /** Fired when a key or local model changes, so readiness must be re-probed. */
+  onReadinessChanged: (callback: (change: ReadinessChange) => void) =>
+    subscribe<ReadinessChange>('readiness:changed', callback),
   /** Fired at the preferences window when the coach deep-links a section. */
   onPreferencesNavigate: (callback: (section: PreferencesSection) => void) =>
     subscribe<{ section: PreferencesSection }>('preferences:navigate', (p) => callback(p.section)),

@@ -89,6 +89,40 @@ test.describe('renderer security', () => {
     }
   });
 
+  test('the microphone is denied unless a capture grant is armed; armed capture still works', async () => {
+    const { app } = await launchApp({ seedSettings: READY_SETTINGS });
+    try {
+      const page = await app.firstWindow();
+      await expect(page.getByTestId('listen-button')).toBeVisible();
+      const mic = await page.evaluate(async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream.getTracks().forEach((t) => t.stop());
+          return 'granted';
+        } catch (err) {
+          return (err as Error).name;
+        }
+      });
+      expect(mic).toBe('NotAllowedError');
+      // Electron checks `media` before the display-media handler consumes the
+      // grant, so an armed Listen must still be able to capture.
+      const capture = await page.evaluate(async () => {
+        await window.cuedeck.armCapture(crypto.randomUUID());
+        try {
+          const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+          const kinds = stream.getTracks().map((t) => t.kind);
+          stream.getTracks().forEach((t) => t.stop());
+          return kinds;
+        } catch (err) {
+          return (err as Error).name;
+        }
+      });
+      expect(capture).toEqual(expect.arrayContaining(['audio']));
+    } finally {
+      await app.close();
+    }
+  });
+
   test('saved credentials never appear in public settings', async () => {
     const { app } = await launchApp({ seedSettings: READY_SETTINGS });
     try {

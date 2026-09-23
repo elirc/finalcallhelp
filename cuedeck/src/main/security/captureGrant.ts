@@ -27,9 +27,18 @@ export class CaptureGrant {
     return { expiresAt: this.armedAt + this.ttlMs };
   }
 
+  /**
+   * Whether a grant is armed and unexpired, without consuming it. The
+   * session permission handlers use this to allow `media` only during the
+   * short window between `capture:arm` and the display-media request.
+   */
+  isArmed(): boolean {
+    return this.armedSessionId !== null && this.now() - this.armedAt <= this.ttlMs;
+  }
+
   /** Consume the grant if armed and unexpired. */
   consume(): boolean {
-    const valid = this.armedSessionId !== null && this.now() - this.armedAt <= this.ttlMs;
+    const valid = this.isArmed();
     this.armedSessionId = null;
     this.armedAt = 0;
     return valid;

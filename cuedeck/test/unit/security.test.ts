@@ -38,6 +38,33 @@ describe('CaptureGrant', () => {
     expect(grant.arm('s').expiresAt).toBe(Date.now() + 8_000);
     vi.useRealTimers();
   });
+
+  it('isArmed reports an armed grant without consuming it', () => {
+    const grant = new CaptureGrant();
+    expect(grant.isArmed()).toBe(false);
+    grant.arm('session-1');
+    expect(grant.isArmed()).toBe(true);
+    expect(grant.isArmed()).toBe(true);
+    expect(grant.consume()).toBe(true);
+    expect(grant.isArmed()).toBe(false);
+  });
+
+  it('isArmed is false once the TTL passes', () => {
+    let now = 1_000;
+    const grant = new CaptureGrant(5_000, () => now);
+    grant.arm('session-1');
+    now += 5_000;
+    expect(grant.isArmed()).toBe(true);
+    now += 1;
+    expect(grant.isArmed()).toBe(false);
+  });
+
+  it('isArmed is false after disarm', () => {
+    const grant = new CaptureGrant();
+    grant.arm('session-1');
+    grant.disarm();
+    expect(grant.isArmed()).toBe(false);
+  });
 });
 
 describe('outbound host allowlist', () => {
