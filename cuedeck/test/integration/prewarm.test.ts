@@ -119,7 +119,14 @@ describe('LocalWhisperProvider.warmup', () => {
     const loaded: string[] = [];
     const fakeManager = {
       isInstalled: async (modelId: string) => installed.includes(modelId),
-      ensureModel: async (modelId: string) => {
+      ensureModel: async (
+        modelId: string,
+        _onProgress: unknown,
+        _signal: AbortSignal,
+        options?: { allowDownload?: boolean },
+      ) => {
+        // Warmup must never let the worker fetch model files.
+        expect(options?.allowDownload).not.toBe(true);
         loaded.push(modelId);
       },
     } as unknown as SttWorkerManager;

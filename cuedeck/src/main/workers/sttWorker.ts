@@ -11,6 +11,8 @@ interface LoadMessage {
   type: 'load';
   modelId: string;
   cacheDir: string;
+  /** False for warmup/transcription: load from disk only, never fetch. */
+  allowDownload: boolean;
 }
 
 interface TranscribeMessage {
@@ -39,10 +41,13 @@ function post(message: unknown): void {
   parentPort.postMessage(message);
 }
 
-async function loadModel(modelId: string, cacheDir: string): Promise<void> {
+async function loadModel(modelId: string, cacheDir: string, allowDownload: boolean): Promise<void> {
   const transformers = await import('@huggingface/transformers');
   transformers.env.cacheDir = cacheDir;
   transformers.env.allowLocalModels = true;
+  // Transformers.js fetches missing files by default; only an explicit
+  // download may do that.
+  transformers.env.allowRemoteModels = allowDownload;
   const pipe = await transformers.pipeline('automatic-speech-recognition', modelId, {
     dtype: 'q8',
     progress_callback: (info: unknown) => {
@@ -69,10 +74,12 @@ async function loadModel(modelId: string, cacheDir: string): Promise<void> {
 parentPort.on('message', (event: { data: InMessage }) => {
   const msg = event.data;
   if (msg.type === 'load') {
-    loading = loadModel(msg.modelId, msg.cacheDir)
+    const allowDownload = msg.allowDownload === true;
+    loading = loadModel(msg.modelId, msg.cacheDir, allowDownload)
       .then(() => post({ type: 'loaded', modelId: msg.modelId }))
       .catch((err: unknown) => {
-        post({ type: 'load-error', detail: err instanceof Error ? err.message : String(err) });
+        const message = err instanceof Error ? err.message : String(err);
+        post({ type: 'load-error', detail: allowDownload ? message : `not installed: ${message}` });
       });
     return;
   }

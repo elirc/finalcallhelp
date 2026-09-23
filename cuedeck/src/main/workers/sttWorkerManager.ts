@@ -22,10 +22,34 @@ interface Manifest {
   models: ManifestEntry[];
 }
 
+export interface EnsureModelOptions {
+  /**
+   * Let Transformers.js fetch missing model files from the network. Only an
+   * explicit user download (`models:download`) sets this; warmup and
+   * transcription load from disk and fail with MODEL_NOT_INSTALLED instead.
+   */
+  allowDownload?: boolean;
+}
+
+/** One model load in flight, shared by every caller that asked for it. */
+interface PendingLoad {
+  modelId: string;
+  worker: UtilityProcess;
+  controller: AbortController;
+  waiters: number;
+  listeners: Set<{ onProgress: (p: ModelProgress) => void }>;
+  promise: Promise<void>;
+}
+
 /**
  * Owns the STT utility process and the local model manifest.
  * Cancellation kills the process (which aborts any in-flight download or
  * inference) and the next request respawns it.
+ *
+ * Model loads are single-flight: callers asking for the model already being
+ * loaded join that load instead of restarting it. Each caller's signal only
+ * detaches that caller; the load itself (and its worker) is aborted when the
+ * last waiter leaves, or when a different model is requested.
  */
 const INSTALLED_CACHE_MS = 10_000;
 
@@ -34,6 +58,7 @@ export class SttWorkerManager {
   private loadedModelId: string | null = null;
   private nextRequestId = 1;
   private status: 'idle' | 'loading' | 'ready' = 'idle';
+  private pending: PendingLoad | null = null;
   private readonly installedCache = new Map<string, { value: boolean; expiresAt: number }>();
 
   constructor(
@@ -88,6 +113,7 @@ export class SttWorkerManager {
     await fs
       .rm(path.join(this.modelsDir, ...modelId.split('/')), { recursive: true, force: true })
       .catch(() => undefined);
+    if (this.pending?.modelId === modelId) this.abortLoad(this.pending);
     if (this.loadedModelId === modelId) this.stop();
   }
 
@@ -119,25 +145,115 @@ export class SttWorkerManager {
   }
 
   /**
-   * Ensure the model is loaded in the worker; first load downloads it.
-   * Progress is reported through `onProgress`; abort kills the worker.
+   * Ensure the model is loaded in the worker. Progress is reported through
+   * `onProgress`. A load of the same model already in flight is joined; a
+   * load of a different model is aborted (its waiters reject with an
+   * AbortError) and replaced. `signal` detaches only this caller; the load
+   * is aborted and its worker killed when the last waiter detaches.
+   *
+   * `options.allowDownload` (default false) is fixed by whoever starts the
+   * load: a caller that joins an in-flight load inherits its policy. So a
+   * download joining a warmup of the same model loads from disk only (and
+   * fails with MODEL_NOT_INSTALLED if files are missing), and a warmup
+   * joining a download waits for that download.
+   *
    * Invariant: on any failure the half-loaded worker is killed (unless a
-   * newer call already replaced it), so `getStatus` never sticks at
+   * newer load already replaced it), so `getStatus` never sticks at
    * 'loading' and the next request starts from a clean process.
    */
   async ensureModel(
     modelId: string,
     onProgress: (p: ModelProgress) => void,
     signal: AbortSignal,
+    options: EnsureModelOptions = {},
   ): Promise<void> {
     if (this.loadedModelId === modelId && this.status === 'ready') return;
     // 'abort' does not fire for an already-aborted signal, so check first.
     if (signal.aborted) throw signal.reason ?? new DOMException('aborted', 'AbortError');
+    let load = this.pending;
+    if (!load || load.modelId !== modelId) {
+      if (load)
+        this.abortLoad(load, new DOMException('replaced by a different model load', 'AbortError'));
+      load = this.startLoad(modelId, options.allowDownload === true);
+    }
+    return this.join(load, onProgress, signal);
+  }
+
+  /** Abort a load: its waiters reject, and its worker is killed if still current. */
+  private abortLoad(load: PendingLoad, reason?: unknown): void {
+    if (this.pending === load) this.pending = null;
+    load.controller.abort(reason ?? new DOMException('aborted', 'AbortError'));
+    if (this.worker === load.worker) this.stop();
+  }
+
+  private startLoad(modelId: string, allowDownload: boolean): PendingLoad {
     this.stop();
     const worker = this.spawn();
     this.status = 'loading';
-    const wasInstalled = await this.isInstalled(modelId);
+    const load: PendingLoad = {
+      modelId,
+      worker,
+      controller: new AbortController(),
+      waiters: 0,
+      listeners: new Set(),
+      promise: Promise.resolve(),
+    };
+    load.promise = this.loadInto(load, allowDownload);
+    const clear = () => {
+      if (this.pending === load) this.pending = null;
+    };
+    // Also marks the rejection handled when every waiter has already left.
+    load.promise.then(clear, clear);
+    this.pending = load;
+    return load;
+  }
+
+  /** Wait on a shared load; this caller's abort detaches only this caller. */
+  private join(
+    load: PendingLoad,
+    onProgress: (p: ModelProgress) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const entry = { onProgress };
+    load.waiters++;
+    load.listeners.add(entry);
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const detach = () => {
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        load.listeners.delete(entry);
+        load.waiters--;
+      };
+      const onAbort = () => {
+        if (settled) return;
+        detach();
+        // Only the last waiter leaving aborts the shared load.
+        if (load.waiters === 0) this.abortLoad(load);
+        reject(signal.reason ?? new DOMException('aborted', 'AbortError'));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      load.promise.then(
+        () => {
+          if (settled) return;
+          detach();
+          resolve();
+        },
+        (err: unknown) => {
+          if (settled) return;
+          detach();
+          reject(err);
+        },
+      );
+    });
+  }
+
+  /** Post the load to the load's worker and wait for it to finish. */
+  private async loadInto(load: PendingLoad, allowDownload: boolean): Promise<void> {
+    const { modelId, worker } = load;
+    const signal = load.controller.signal;
     try {
+      const wasInstalled = await this.isInstalled(modelId);
       await new Promise<void>((resolve, reject) => {
         const onAbort = () => {
           cleanup();
@@ -146,11 +262,12 @@ export class SttWorkerManager {
         const onMessage = (event: { data?: unknown } | unknown) => {
           const msg = ((event as { data?: unknown }).data ?? event) as Record<string, unknown>;
           if (msg.type === 'load-progress') {
-            onProgress({
+            const progress: ModelProgress = {
               stage: wasInstalled ? 'loading' : 'downloading',
               file: typeof msg.file === 'string' ? msg.file : undefined,
               value: typeof msg.progress === 'number' ? msg.progress : undefined,
-            });
+            };
+            for (const listener of [...load.listeners]) listener.onProgress(progress);
           } else if (msg.type === 'loaded') {
             cleanup();
             resolve();
@@ -177,15 +294,18 @@ export class SttWorkerManager {
         signal.addEventListener('abort', onAbort, { once: true });
         worker.on('message', onMessage as never);
         worker.on('exit', onExit);
-        worker.postMessage({ type: 'load', modelId, cacheDir: this.modelsDir });
+        worker.postMessage({ type: 'load', modelId, cacheDir: this.modelsDir, allowDownload });
       });
+      if (signal.aborted || this.worker !== worker) {
+        throw signal.reason ?? new DOMException('aborted', 'AbortError');
+      }
+      this.loadedModelId = modelId;
+      this.status = 'ready';
+      if (!wasInstalled) await this.recordInstall(modelId);
     } catch (err) {
       if (this.worker === worker) this.stop();
       throw err;
     }
-    this.loadedModelId = modelId;
-    this.status = 'ready';
-    if (!wasInstalled) await this.recordInstall(modelId);
   }
 
   private async recordInstall(modelId: string): Promise<void> {
@@ -227,7 +347,11 @@ export class SttWorkerManager {
     signal: AbortSignal;
     onProgress: (p: ModelProgress) => void;
   }): Promise<TranscriptResult> {
+    // Never downloads: a model missing from disk fails with MODEL_NOT_INSTALLED.
     await this.ensureModel(input.modelId, input.onProgress, input.signal);
+    // A load of a different model may have replaced the worker meanwhile.
+    if (this.loadedModelId !== input.modelId)
+      throw new CoachError('MODEL_NOT_INSTALLED', 'model worker replaced');
     const worker = this.worker;
     if (!worker) throw new CoachError('MODEL_NOT_INSTALLED', 'model worker unavailable');
     const id = this.nextRequestId++;

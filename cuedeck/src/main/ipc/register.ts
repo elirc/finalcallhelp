@@ -227,6 +227,9 @@ export function registerIpc(services: AppServices): void {
       throw new CoachError('PROVIDER_UNAVAILABLE', 'A model download is already running.');
     const controller = new AbortController();
     downloadOperations.set(operationId, controller);
+    // Joins a load of the same model already in flight (e.g. a warmup)
+    // instead of restarting it; cancelling detaches only this download and
+    // kills the load only if nothing else is waiting on it.
     void services.sttWorkers
       .ensureModel(
         modelId,
@@ -239,6 +242,7 @@ export function registerIpc(services: AppServices): void {
             detail: p.file,
           }),
         controller.signal,
+        { allowDownload: true },
       )
       .then(() => {
         probeCache.invalidate('local-whisper');
