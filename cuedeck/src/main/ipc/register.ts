@@ -18,6 +18,7 @@ import {
   modelsCancelDownloadSchema,
   modelsDownloadSchema,
   modelsListSchema,
+  modelsRemoveSchema,
   openExternalSchema,
   openPreferencesSchema,
   profileDeleteSchema,
@@ -264,6 +265,21 @@ export function registerIpc(services: AppServices): void {
     const { operationId } = modelsCancelDownloadSchema.parse(raw);
     downloadOperations.get(operationId)?.abort();
     return true;
+  });
+
+  secureHandle('models:remove', async (_event, raw) => {
+    const { modelId } = modelsRemoveSchema.parse(raw);
+    if (!LOCAL_STT_MODELS.some((model) => model.id === modelId))
+      throw new CoachError('MODEL_NOT_INSTALLED', 'Choose a model from the local model catalog.');
+    if (downloadOperations.size)
+      throw new CoachError(
+        'PROVIDER_UNAVAILABLE',
+        'A model download is running. Cancel it before removing a model.',
+      );
+    await services.sttWorkers.removeModel(modelId);
+    probeCache.invalidate('local-whisper');
+    services.broadcast('readiness:changed', { reason: 'model-removed' });
+    return { removed: true };
   });
 
   // ---- capture ---------------------------------------------------------------

@@ -58,7 +58,8 @@ Sections:
      (typed questions work immediately, Listen needs the local speech model too).
    - **Try the demo**: no key, no download; streams a fixed sample so you can learn the controls.
    - **Use local mode**: download a Whisper model (Base is recommended) and install Ollama with a
-     small model (`ollama pull qwen2.5:3b-instruct`). Nothing leaves your computer.
+     small model (`ollama pull qwen2.5:3b-instruct`). Apart from the model download you start,
+     audio, transcripts and profiles stay on your computer.
 3. **Test system audio.** Play any sound on the computer and run the 5-second test. If it reports
    silence, see [Troubleshooting](#6-troubleshooting).
 4. **Add your background (optional but recommended).** Name, call type, tech stack, résumé
@@ -79,8 +80,11 @@ reading an answer keeps your gaze near the camera. If you move it, it remembers 
   larger text. **Expand** brings back the transcript, practice deck, notes, and style controls.
 - **A−** / **A+** on the response card change the text size. Preferences → General has a slider.
 
-Full layout (here with speech-to-text not yet set up, so the readiness card explains what is
-missing above the response):
+The screenshots below are **fixture screenshots** from the automated test suite (a fake local
+model and short sample answers), not a live session.
+
+Full layout (here with speech-to-text not yet set up; typed questions still work, so a slim
+notice explains what is missing below the response):
 
 ![Coach window, full layout](images/guide-coach-full.png)
 
@@ -129,8 +133,9 @@ A profile is the background the model may draw on. Since this release each profi
 | Team meeting            | Colleague voice: position, reason, next step.                                                                                           | Concise, 15 s   |
 
 The call type adds fixed answering rules to the prompt. The tech stack is sent as reference data
-in its own fenced block, so it grounds what the model may claim without being able to change its
-instructions.
+in its own fenced block, and the prompt tells the model to treat it as data rather than
+instructions. This is a prompting defence that makes it much harder for the stack text to change
+the rules, not a guarantee about model output; review answers before you use them.
 
 **Recommended setup:** one profile per kind of call you take, e.g. "Backend interviews"
 (technical interview; Go, Postgres, Kafka), "Frontend interviews" (technical interview;
@@ -181,8 +186,8 @@ Errors on the coach have an **Open settings** button that opens the section that
 | "The recording was silent"                          | Same cause as above, detected after Stop. Run the audio test in Preferences via **Set up real AI** → audio step.                                                                                                           |
 | "The provider rejected the saved API key"           | Preferences → Providers → replace the key. Keys never display after saving.                                                                                                                                                |
 | "The provider rate-limited this request"            | Free tiers have per-minute and per-day quotas. Wait, or switch provider. Nothing is saved when a request fails.                                                                                                            |
-| "Is Ollama running?"                                | Start Ollama, then **Check again**. CueDeck only talks to `http://127.0.0.1:11434`.                                                                                                                                        |
-| Window is off-screen after unplugging a monitor     | It should come back top-centre on its own. If not, click **Eye line** from Preferences → General → **Dock at eye level now**, or delete `window-state.json` (see section 9).                                               |
+| "Is Ollama running?"                                | Start Ollama, then **Check again**. CueDeck talks to `http://127.0.0.1:11434` by default; any other loopback address or port you set in Preferences → Providers is accepted after validation.                                                                                                                                        |
+| Window is off-screen after unplugging a monitor     | The next time CueDeck starts (or when you dock it), an off-screen position is replaced by top-centre. Right away, click **Eye line** from Preferences → General → **Dock at eye level now**, or delete `window-state.json` (see section 9).                                               |
 | SmartScreen blocks the installer                    | Expected for an unsigned build; use **More info → Run anyway** after checking the SHA-256.                                                                                                                                 |
 | Answers reference tools you never used              | Check the active profile's tech stack and summary; the model is told to stay inside them, and the technical call type makes that rule explicit. Switch profile in the title bar if the wrong one is active.                |
 | Everything is slow on first use in local mode       | The first answer loads the models into memory. CueDeck pre-loads them at start-up and when you press Listen; give it a few seconds after launch before the first clip.                                                     |
@@ -272,7 +277,14 @@ Everything is under `%APPDATA%\CueDeck\`:
 | `window-state.json` | Last coach window position and size                                              |
 | `models\`           | Downloaded local speech models                                                   |
 
-What leaves the computer: in local mode, nothing. With a cloud provider, the current clip (speech
+What leaves the computer: in local mode, only the model download you start from **Download**
+(a request to Hugging Face with no content of yours) and requests to Ollama on your own machine;
+audio, transcripts and profiles stay local. A downloaded model can be deleted from Preferences →
+Providers → **Remove downloaded model**. With a cloud provider, the current clip (speech
 provider) or transcript (answer provider), the active profile's summary, role context, emphasis
-notes, and tech stack, plus session notes. Never history, other profiles, screen content, or
-keys. Each cloud provider's data-use policy is linked where you enable it.
+notes, and tech stack, plus session notes. Readiness checks and warmups (at startup, on
+**Check again**, and when you press Listen) send only the model id and your key for that
+provider, never audio, transcripts or profiles. Your API key is sent only to the provider it
+belongs to, for authentication; it is never shown again in the app, never returned to the window,
+and never put into prompt content. Never sent: history, other profiles, or screen content. Each
+cloud provider's data-use policy is linked where you enable it.

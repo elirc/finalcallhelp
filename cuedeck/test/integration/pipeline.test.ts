@@ -31,6 +31,7 @@ function makeHarness(overrides: {
   generate?: (input: AnswerRequest) => AsyncIterable<AnswerDelta>;
   warmup?: (modelId: string, signal: AbortSignal) => Promise<void>;
   historyEnabled?: boolean;
+  now?: () => number;
 }): Harness {
   const registry = new ProviderRegistry();
   const stt: SttProvider = {
@@ -77,6 +78,7 @@ function makeHarness(overrides: {
     },
     emit: (event) => events.push(event),
     recordError: () => undefined,
+    now: overrides.now,
   };
   return { coordinator: new SessionCoordinator(deps), events, history, retentions, settings };
 }
@@ -295,6 +297,26 @@ describe('session pipeline', () => {
     expect(warmedModel).toBe('test-llm');
     // No session exists, so prewarm must emit nothing to the renderer.
     expect(events).toHaveLength(0);
+  });
+
+  it('skips the submit-time LLM warmup within a minute of a prewarm of the same model', async () => {
+    let clock = 1_000_000;
+    let warmups = 0;
+    const { coordinator } = makeHarness({
+      now: () => clock,
+      warmup: async () => {
+        warmups++;
+      },
+    });
+    await coordinator.prewarm();
+    expect(warmups).toBe(1);
+    clock += 5_000;
+    await coordinator.submit(SID, sineWav(2), OPTIONS, 5);
+    expect(warmups).toBe(1);
+    // Outside the window the submit warms again.
+    clock += 61_000;
+    await coordinator.submit(SID2, sineWav(2), OPTIONS, 5);
+    expect(warmups).toBe(2);
   });
 
   it('prewarm swallows warmup failures silently', async () => {

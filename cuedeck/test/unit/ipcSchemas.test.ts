@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   modelsCancelDownloadSchema,
+  modelsRemoveSchema,
   openPreferencesSchema,
   preferencesSectionSchema,
   providersProbeSchema,
@@ -40,5 +41,17 @@ describe('modelsCancelDownloadSchema', () => {
     expect(modelsCancelDownloadSchema.safeParse({ operationId: 'abc' }).success).toBe(false);
     expect(modelsCancelDownloadSchema.safeParse({}).success).toBe(false);
     expect(modelsCancelDownloadSchema.safeParse(null).success).toBe(false);
+  });
+});
+
+describe('modelsRemoveSchema', () => {
+  it('takes a bounded model id and nothing else', () => {
+    expect(modelsRemoveSchema.parse({ modelId: 'onnx-community/whisper-base' })).toEqual({
+      modelId: 'onnx-community/whisper-base',
+    });
+    expect(modelsRemoveSchema.safeParse({ modelId: '' }).success).toBe(false);
+    expect(modelsRemoveSchema.safeParse({ modelId: 'x'.repeat(201) }).success).toBe(false);
+    expect(modelsRemoveSchema.safeParse({}).success).toBe(false);
+    expect(modelsRemoveSchema.safeParse({ modelId: 42 }).success).toBe(false);
   });
 });

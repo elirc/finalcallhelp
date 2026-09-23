@@ -31,9 +31,16 @@ export interface EnsureModelOptions {
   allowDownload?: boolean;
 }
 
+export interface SttWorkerManagerOptions {
+  /** Stop the worker (freeing model memory) after this long unused. Default 15 minutes. */
+  idleUnloadMs?: number;
+}
+
 /** One model load in flight, shared by every caller that asked for it. */
 interface PendingLoad {
   modelId: string;
+  /** Set by whoever started the load; joiners inherit it. */
+  allowDownload: boolean;
   worker: UtilityProcess;
   controller: AbortController;
   waiters: number;
@@ -52,6 +59,9 @@ interface PendingLoad {
  * last waiter leaves, or when a different model is requested.
  */
 const INSTALLED_CACHE_MS = 10_000;
+const DEFAULT_IDLE_UNLOAD_MS = 15 * 60_000;
+/** Progress is forwarded at most this often per file, unless the whole percentage changes. */
+const PROGRESS_MIN_INTERVAL_MS = 100;
 
 export class SttWorkerManager {
   private worker: UtilityProcess | null = null;
@@ -60,12 +70,40 @@ export class SttWorkerManager {
   private status: 'idle' | 'loading' | 'ready' = 'idle';
   private pending: PendingLoad | null = null;
   private readonly installedCache = new Map<string, { value: boolean; expiresAt: number }>();
+  private readonly idleUnloadMs: number;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private activeTranscribes = 0;
 
   constructor(
     private readonly workerPath: string,
     private readonly modelsDir: string,
     private readonly reportCorrupt?: (file: string, quarantinePath: string) => void,
-  ) {}
+    options: SttWorkerManagerOptions = {},
+  ) {
+    this.idleUnloadMs = options.idleUnloadMs ?? DEFAULT_IDLE_UNLOAD_MS;
+  }
+
+  private clearIdle(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+  }
+
+  /**
+   * (Re)start the idle countdown for a loaded worker. The next warmup at
+   * capture arm reloads the model after an idle unload.
+   */
+  private armIdle(): void {
+    this.clearIdle();
+    if (!this.worker || this.status !== 'ready') return;
+    const timer = setTimeout(() => {
+      if (this.idleTimer !== timer) return;
+      this.idleTimer = null;
+      if (this.pending || this.activeTranscribes > 0) return;
+      this.stop();
+    }, this.idleUnloadMs);
+    timer.unref?.();
+    this.idleTimer = timer;
+  }
 
   get manifestPath(): string {
     return path.join(this.modelsDir, 'manifest.json');
@@ -139,6 +177,7 @@ export class SttWorkerManager {
 
   /** Kill the worker (freeing model memory); the next request respawns it. */
   stop(): void {
+    this.clearIdle();
     if (this.worker) {
       this.worker.kill();
       this.worker = null;
@@ -160,6 +199,11 @@ export class SttWorkerManager {
    * fails with MODEL_NOT_INSTALLED if files are missing), and a warmup
    * joining a download waits for that download.
    *
+   * A user download is never replaced by a non-download request for a
+   * different model (a warmup or transcription after switching models):
+   * that request rejects with MODEL_NOT_INSTALLED and the download goes on.
+   * A different-model request that itself allows downloads still replaces.
+   *
    * Invariant: on any failure the half-loaded worker is killed (unless a
    * newer load already replaced it), so `getStatus` never sticks at
    * 'loading' and the next request starts from a clean process.
@@ -170,11 +214,17 @@ export class SttWorkerManager {
     signal: AbortSignal,
     options: EnsureModelOptions = {},
   ): Promise<void> {
-    if (this.loadedModelId === modelId && this.status === 'ready') return;
+    if (this.loadedModelId === modelId && this.status === 'ready') {
+      this.armIdle(); // a warmup counts as use
+      return;
+    }
     // 'abort' does not fire for an already-aborted signal, so check first.
     if (signal.aborted) throw signal.reason ?? new DOMException('aborted', 'AbortError');
+    this.clearIdle();
     let load = this.pending;
     if (!load || load.modelId !== modelId) {
+      if (load?.allowDownload && options.allowDownload !== true)
+        throw new CoachError('MODEL_NOT_INSTALLED', 'a model download is in progress');
       if (load)
         this.abortLoad(load, new DOMException('replaced by a different model load', 'AbortError'));
       load = this.startLoad(modelId, options.allowDownload === true);
@@ -195,6 +245,7 @@ export class SttWorkerManager {
     this.status = 'loading';
     const load: PendingLoad = {
       modelId,
+      allowDownload,
       worker,
       controller: new AbortController(),
       waiters: 0,
@@ -257,6 +308,10 @@ export class SttWorkerManager {
     const signal = load.controller.signal;
     try {
       const wasInstalled = await this.isInstalled(modelId);
+      // Throttle state: Transformers.js reports every downloaded chunk.
+      let lastFile: string | undefined;
+      let lastPercent = -1;
+      let lastForwardAt = 0;
       await new Promise<void>((resolve, reject) => {
         const onAbort = () => {
           cleanup();
@@ -270,6 +325,17 @@ export class SttWorkerManager {
               file: typeof msg.file === 'string' ? msg.file : undefined,
               value: typeof msg.progress === 'number' ? msg.progress : undefined,
             };
+            const now = Date.now();
+            const percent = progress.value === undefined ? -1 : Math.floor(progress.value);
+            if (
+              progress.file === lastFile &&
+              percent === lastPercent &&
+              now - lastForwardAt < PROGRESS_MIN_INTERVAL_MS
+            )
+              return;
+            lastFile = progress.file;
+            lastPercent = percent;
+            lastForwardAt = now;
             for (const listener of [...load.listeners]) listener.onProgress(progress);
           } else if (msg.type === 'loaded') {
             cleanup();
@@ -304,6 +370,7 @@ export class SttWorkerManager {
       }
       this.loadedModelId = modelId;
       this.status = 'ready';
+      this.armIdle();
       if (!wasInstalled) await this.recordInstall(modelId);
     } catch (err) {
       if (this.worker === worker) this.stop();
@@ -344,6 +411,23 @@ export class SttWorkerManager {
    * in-flight inference — and the next request respawns it.
    */
   async transcribe(input: {
+    audio: Float32Array;
+    modelId: string;
+    language?: string;
+    signal: AbortSignal;
+    onProgress: (p: ModelProgress) => void;
+  }): Promise<TranscriptResult> {
+    this.clearIdle();
+    this.activeTranscribes++;
+    try {
+      return await this.runTranscribe(input);
+    } finally {
+      this.activeTranscribes--;
+      if (this.activeTranscribes === 0 && !this.pending) this.armIdle();
+    }
+  }
+
+  private async runTranscribe(input: {
     audio: Float32Array;
     modelId: string;
     language?: string;

@@ -7,7 +7,9 @@ and manual/automated testing checklists.
 CueDeck is a **free, local-first conversation practice and disclosed-assistance coach** for
 Windows. Press **Listen**, let it hear a short clip of this computer's audio (a mock-interview
 question, a permitted call), and it transcribes the clip and streams a concise first-person
-response card grounded in _your_ profile — nothing invented.
+response card grounded in _your_ profile. The prompt instructs the model not to invent
+experience and fences your data; that is a prompting defence, not a guarantee, so review
+each answer.
 
 Built for: mock interviews and rehearsal, disclosed response cues on permitted calls,
 accessibility support, and anyone who wants a call assistant without a subscription.
@@ -57,7 +59,8 @@ Local mode is the default and the only mode labeled **Always free**:
   [Transformers.js](https://huggingface.co/docs/transformers.js) in an isolated Electron
   utility process (a helper process separate from both the UI and the main process).
 - **Responses:** any local model served by [Ollama](https://ollama.com) at
-  `http://127.0.0.1:11434` (e.g. `ollama pull qwen2.5:3b-instruct`).
+  `http://127.0.0.1:11434` by default, or another validated loopback address/port
+  (e.g. `ollama pull qwen2.5:3b-instruct`).
 - No account, API key, credit card, telemetry, or hosted backend. After the one-time model
   downloads, the full flow works offline.
 
@@ -222,11 +225,12 @@ Sandboxed React renderer  (contextIsolation, no Node, fixed preload API)
   ▼
 Electron main process
   ├─ window/session hardening (CSP from default-src 'none', nav denial, fuses)
-  ├─ one-use expiring capture grant → Windows loopback audio
+  ├─ one-use expiring capture grant → Windows loopback audio (16 kHz AudioContext + worklet)
   ├─ session coordinator (abort, stage timeouts, structured errors)
   ├─ public settings (JSON + migrations) / secret vault (safeStorage ciphertext)
   ├─ provider registry
-  │    ├─ local Whisper STT → utility process (Transformers.js)
+  │    ├─ local Whisper STT → utility process (Transformers.js; single-flight loads,
+  │    │    downloads only on explicit request, idle unload after 15 min)
   │    ├─ Ollama localhost NDJSON streaming
   │    └─ optional HTTPS: Groq / Cerebras / Gemini / OpenRouter (host allowlist)
   └─ optional local history + diagnostics (secret-redacted)
@@ -237,7 +241,15 @@ Notes on the diagram: the **capture grant** means the renderer must explicitly a
 `getDisplayMedia` request is denied. **NDJSON** (newline-delimited JSON) is Ollama's streaming
 format: one JSON object per line, which the app parses incrementally to stream tokens into the
 response card. The main process may only contact loopback plus a short hardcoded host allowlist
-(Groq, Google, OpenRouter, Hugging Face model CDN — see `src/shared/constants.ts`).
+(Groq, Cerebras, Google, OpenRouter, Hugging Face — see `src/shared/constants.ts`), and refuses
+redirects. Local model files are fetched separately by Transformers.js in the STT utility
+process, and only when you press **Download**; warmups and transcriptions never download.
+Besides session events, the main process pushes `settings:changed` and `readiness:changed`
+(credential saved/removed, model installed/removed) so every window re-checks readiness without
+a restart. Packaged builds ship without the default Electron menu, and the renderer gets the
+`media` permission only while a capture grant is armed. Unreadable store files are quarantined
+(`<name>.corrupt-<time>.json`) rather than overwritten. Test tiers and coverage: see
+[docs/TESTING.md](docs/TESTING.md).
 
 ## Troubleshooting
 
@@ -258,8 +270,8 @@ or is needed in this project.
 **The Whisper model download is slow or fails.**
 Models are 120–600 MB and come from Hugging Face (`huggingface.co` and its CDN hosts are on
 the allowlist). Downloaded files are cached in `%APPDATA%\CueDeck\models`; if a download went
-wrong, delete that model's folder there and use "Download / verify selected model" in
-Preferences to fetch it again. Behind a proxy or firewall, those hosts must be reachable —
+wrong, use **Remove downloaded model** (two-step confirm) and then "Download / verify selected
+model" in Preferences → Providers to fetch it again. Behind a proxy or firewall, those hosts must be reachable —
 there is no mirror setting.
 
 **"Ollama not detected" or responses never start.**
@@ -314,7 +326,8 @@ explain the Electron-specific pieces as they go:
   outbound host allowlist, `safeStorage`-encrypted credentials (DPAPI on Windows), and no
   `setContentProtection` or any capture-concealment API, ever.
 - [PRIVACY.md](PRIVACY.md) — exactly what is stored, where, and what leaves the machine in
-  each mode (in local mode: nothing).
+  each mode (in local mode: nothing except model downloads you start and requests to your
+  local Ollama).
 
 ## License
 

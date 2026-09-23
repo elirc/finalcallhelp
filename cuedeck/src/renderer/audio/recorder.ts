@@ -1,6 +1,9 @@
 import { encodeWav, resample } from '../../shared/audio';
 import { TARGET_SAMPLE_RATE } from '../../shared/constants';
 
+/** Minimum gap between level callbacks; 0 = one per worklet block. */
+const LEVEL_POST_MIN_MS = 0;
+
 export interface RecorderCallbacks {
   onLevel: (rms: number, peak: number, elapsedMs: number) => void;
   onAutoStop: () => void;
@@ -53,7 +56,9 @@ export class ClipRecorder {
       throw new Error('CAPTURE_NO_AUDIO');
     }
     this.stream = new MediaStream(audioTracks);
-    this.context = new AudioContext();
+    // Chromium resamples the capture stream to 16 kHz with a proper
+    // anti-aliasing filter, so the clip needs no resampling of its own.
+    this.context = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
     this.sampleRate = this.context.sampleRate;
     await this.context.audioWorklet.addModule('./audio-capture-worklet.js');
     ensureActive();
@@ -72,10 +77,12 @@ export class ClipRecorder {
         peak: number;
       };
       this.chunks.push(samples);
-      const elapsedMs = performance.now() - this.startedAt;
       const now = performance.now();
-      if (now - this.lastLevelPost > 66) {
-        // ~15 Hz meter updates (spec §18)
+      const elapsedMs = now - this.startedAt;
+      // The worklet posts one 2048-frame block (128 ms at 16 kHz), so every
+      // block updates the meter: ~8 Hz (spec §18 asks for about 15 Hz; the
+      // block size trades that for ~8 posts/s instead of ~375).
+      if (now - this.lastLevelPost >= LEVEL_POST_MIN_MS) {
         this.lastLevelPost = now;
         this.callbacks.onLevel(rms, peak, elapsedMs);
       }
@@ -99,6 +106,8 @@ export class ClipRecorder {
       offset += chunk.length;
     }
     this.chunks = []; // release capture buffers (CAP-09)
+    // A no-op when the context honoured the 16 kHz request; kept as a
+    // safety net for a device that forces another rate.
     const resampled = resample(merged, this.sampleRate, TARGET_SAMPLE_RATE);
     const wav = encodeWav(resampled, TARGET_SAMPLE_RATE);
     const buffer = wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength) as ArrayBuffer;

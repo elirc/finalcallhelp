@@ -126,6 +126,8 @@ export const modelsDownloadSchema = z.object({
 
 export const modelsCancelDownloadSchema = z.object({ operationId: sessionIdSchema });
 
+export const modelsRemoveSchema = z.object({ modelId: z.string().min(1).max(200) });
+
 export const captureArmSchema = z.object({ sessionId: sessionIdSchema });
 
 /** Bounds for a submitted WAV clip. 16 kHz mono 16-bit for up to 120 s plus

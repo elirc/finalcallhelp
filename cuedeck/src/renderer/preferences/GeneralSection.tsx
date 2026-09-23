@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { PublicSettings } from '../../shared/domain';
 import type { SectionProps } from './types';
+
+const SLIDER_DEBOUNCE_MS = 150;
 
 export function GeneralSection({
   settings: savedSettings,
@@ -18,6 +20,33 @@ export function GeneralSection({
       setSettings(savedSettings);
       throw err;
     }
+  };
+  // Sliders fire on every tick: show the value live, but write settings (an
+  // atomic file write plus a broadcast to both windows) at most once per
+  // pause in dragging.
+  const slidePatch = useRef<Partial<PublicSettings>>({});
+  const slideTimer = useRef<number | undefined>(undefined);
+  // On unmount (switching section), write a pending slider value now rather
+  // than dropping it. The main process broadcasts the change to both windows.
+  useEffect(
+    () => () => {
+      window.clearTimeout(slideTimer.current);
+      const pending = slidePatch.current;
+      slidePatch.current = {};
+      if (Object.keys(pending).length > 0)
+        void window.cuedeck.updatePublicSettings(pending).catch(() => undefined);
+    },
+    [],
+  );
+  const slide = (patch: Partial<PublicSettings>) => {
+    setSettings((current) => ({ ...current, ...patch }));
+    slidePatch.current = { ...slidePatch.current, ...patch };
+    window.clearTimeout(slideTimer.current);
+    slideTimer.current = window.setTimeout(() => {
+      const pending = slidePatch.current;
+      slidePatch.current = {};
+      void update(pending).catch(() => undefined);
+    }, SLIDER_DEBOUNCE_MS);
   };
   return (
     <>
@@ -59,7 +88,7 @@ export function GeneralSection({
             max={1.6}
             step={0.05}
             value={settings.fontScale}
-            onChange={(e) => void update({ fontScale: Number(e.target.value) })}
+            onChange={(e) => slide({ fontScale: Number(e.target.value) })}
           />
         </label>
       </section>
@@ -73,7 +102,7 @@ export function GeneralSection({
             max={120}
             step={5}
             value={settings.maxClipSeconds}
-            onChange={(e) => void update({ maxClipSeconds: Number(e.target.value) })}
+            onChange={(e) => slide({ maxClipSeconds: Number(e.target.value) })}
           />
         </label>
         <label className="field">

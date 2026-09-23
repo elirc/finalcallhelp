@@ -352,3 +352,124 @@ describe('SttWorkerManager download policy', () => {
     expect(forks[0]?.loads).toEqual([{ modelId: MODEL, allowDownload: true }]);
   });
 });
+
+describe('SttWorkerManager protects user downloads', () => {
+  it('rejects a non-download request for another model while a download runs', async () => {
+    hang.load = 'hang';
+    const manager = new SttWorkerManager('worker.js', tmp());
+    const download = settle(
+      manager.ensureModel(MODEL, noop, new AbortController().signal, { allowDownload: true }),
+    );
+    await vi.waitFor(() => expect(forks[0]?.loads).toHaveLength(1));
+    const warmup = await settle(
+      manager.ensureModel(OTHER_MODEL, noop, new AbortController().signal),
+    );
+    expect(warmup.ok).toBe(false);
+    if (!warmup.ok) {
+      expect(toPublicError(warmup.error).code).toBe('MODEL_NOT_INSTALLED');
+      expect(warmup.error.message).toContain('a model download is in progress');
+    }
+    expect(forks[0]?.killed).toBe(false);
+    forks[0]!.emit('message', { data: { type: 'loaded', modelId: MODEL } });
+    expect((await download).ok).toBe(true);
+    expect(forks).toHaveLength(1);
+    expect(manager.getStatus()).toEqual({ state: 'ready', modelId: MODEL });
+  });
+
+  it('a different-model download still replaces a running download', async () => {
+    hang.load = 'hang';
+    const manager = new SttWorkerManager('worker.js', tmp());
+    const first = settle(
+      manager.ensureModel(MODEL, noop, new AbortController().signal, { allowDownload: true }),
+    );
+    await vi.waitFor(() => expect(forks[0]?.loads).toHaveLength(1));
+    const second = settle(
+      manager.ensureModel(OTHER_MODEL, noop, new AbortController().signal, {
+        allowDownload: true,
+      }),
+    );
+    const r1 = await first;
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) expect(r1.error.name).toBe('AbortError');
+    await vi.waitFor(() => expect(forks[1]?.loads).toHaveLength(1));
+    forks[1]!.emit('message', { data: { type: 'loaded', modelId: OTHER_MODEL } });
+    expect((await second).ok).toBe(true);
+    expect(forks).toHaveLength(2);
+  });
+});
+
+describe('SttWorkerManager progress throttle', () => {
+  it('forwards a burst of sub-percent progress only a handful of times, including the last', async () => {
+    hang.load = 'hang';
+    const manager = new SttWorkerManager('worker.js', tmp());
+    const seen: Array<{ file?: string; value?: number }> = [];
+    const loaded = manager.ensureModel(MODEL, (p) => seen.push(p), new AbortController().signal);
+    await vi.waitFor(() => expect(forks[0]?.loads).toHaveLength(1));
+    const worker = forks[0]!;
+    // 10.1%, 10.2%, ... 15.0% for one file, all within a few milliseconds.
+    for (let i = 1; i <= 50; i++) {
+      worker.emit('message', {
+        data: { type: 'load-progress', file: 'model.onnx', progress: (100 + i) / 10 },
+      });
+    }
+    worker.emit('message', { data: { type: 'loaded', modelId: MODEL } });
+    await loaded;
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.length).toBeLessThan(10);
+    expect(seen.at(-1)?.value).toBe(15);
+  });
+
+  it('forwards immediately when the file changes', async () => {
+    hang.load = 'hang';
+    const manager = new SttWorkerManager('worker.js', tmp());
+    const seen: Array<{ file?: string; value?: number }> = [];
+    const loaded = manager.ensureModel(MODEL, (p) => seen.push(p), new AbortController().signal);
+    await vi.waitFor(() => expect(forks[0]?.loads).toHaveLength(1));
+    const worker = forks[0]!;
+    worker.emit('message', { data: { type: 'load-progress', file: 'a.onnx', progress: 50.1 } });
+    worker.emit('message', { data: { type: 'load-progress', file: 'a.onnx', progress: 50.2 } });
+    worker.emit('message', { data: { type: 'load-progress', file: 'b.json', progress: 50.2 } });
+    worker.emit('message', { data: { type: 'loaded', modelId: MODEL } });
+    await loaded;
+    expect(seen.map((p) => p.file)).toEqual(['a.onnx', 'b.json']);
+  });
+});
+
+describe('SttWorkerManager idle unload', () => {
+  it('stops the worker after the idle period and reloads on the next transcribe', async () => {
+    const manager = new SttWorkerManager('worker.js', tmp(), undefined, { idleUnloadMs: 30 });
+    const run = () =>
+      manager.transcribe({
+        audio: audio(),
+        modelId: MODEL,
+        signal: new AbortController().signal,
+        onProgress: noop,
+      });
+    expect((await run()).text).toBe('hello');
+    expect(manager.getStatus().state).toBe('ready');
+    await vi.waitFor(() => expect(manager.getStatus().state).toBe('idle'), { timeout: 100 });
+    expect(forks[0]?.killed).toBe(true);
+    expect((await run()).text).toBe('hello');
+    expect(forks).toHaveLength(2);
+  });
+
+  it('does not unload while a transcription is running', async () => {
+    const manager = new SttWorkerManager('worker.js', tmp(), undefined, { idleUnloadMs: 10 });
+    await manager.ensureModel(MODEL, noop, new AbortController().signal);
+    hang.transcribe = true;
+    const controller = new AbortController();
+    const pending = settle(
+      manager.transcribe({
+        audio: audio(),
+        modelId: MODEL,
+        signal: controller.signal,
+        onProgress: noop,
+      }),
+    );
+    await sleep(60);
+    expect(manager.getStatus().state).toBe('ready');
+    expect(forks[0]?.killed).toBe(false);
+    controller.abort();
+    await pending;
+  });
+});

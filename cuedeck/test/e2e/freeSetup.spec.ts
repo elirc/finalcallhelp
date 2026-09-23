@@ -1,4 +1,7 @@
 import { expect, test } from '@playwright/test';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { launchApp, READY_SETTINGS, startFakeOllama } from './helpers';
 import { CLOUD_MODELS } from '../../src/shared/catalog';
 
@@ -109,6 +112,60 @@ test('cloud setup tests inference, selects both Groq models, and clears the key 
     await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeEnabled();
     await page.getByLabel('Cloud provider', { exact: true }).selectOption('openrouter');
     await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  } finally {
+    await app.close();
+  }
+});
+
+test('Preferences removes a downloaded local speech model after a confirm step', async () => {
+  const modelId = 'onnx-community/whisper-base';
+  const userData = mkdtempSync(path.join(os.tmpdir(), 'cuedeck-e2e-'));
+  const modelsDir = path.join(userData, 'models');
+  const fileName = 'onnx-community/whisper-base/onnx/dummy.onnx';
+  const dummy = path.join(modelsDir, ...fileName.split('/'));
+  mkdirSync(path.dirname(dummy), { recursive: true });
+  writeFileSync(dummy, Buffer.alloc(64, 1));
+  writeFileSync(
+    path.join(modelsDir, 'manifest.json'),
+    JSON.stringify({
+      version: 1,
+      models: [
+        {
+          modelId,
+          installedAt: '2026-09-22T00:00:00.000Z',
+          files: [{ name: fileName, bytes: 64 }],
+        },
+      ],
+    }),
+  );
+  const { app } = await launchApp({
+    userData,
+    seedSettings: {
+      ...READY_SETTINGS,
+      sttProviderId: 'local-whisper',
+      sttModelId: modelId,
+      llmProviderId: 'demo',
+      llmModelId: 'sample-response',
+    },
+  });
+  try {
+    const page = await app.firstWindow();
+    const [prefs] = await Promise.all([
+      app.waitForEvent('window'),
+      page.getByTestId('open-preferences').click(),
+    ]);
+    await prefs.getByTestId('nav-providers').click();
+    const option = prefs.locator('option', { hasText: 'Whisper Base' });
+    await expect(option).toContainText('installed');
+    const remove = prefs.getByTestId('remove-model-button');
+    await expect(remove).toBeEnabled();
+    await remove.click();
+    await expect(remove).toHaveText('Confirm remove');
+    await remove.click();
+    await expect(prefs.getByText('about 200 MB freed')).toBeVisible();
+    await expect(option).not.toContainText('installed');
+    await expect(remove).toBeDisabled();
+    expect(existsSync(dummy)).toBe(false);
   } finally {
     await app.close();
   }

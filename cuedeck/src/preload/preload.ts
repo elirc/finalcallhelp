@@ -77,6 +77,8 @@ const api = {
     invoke<{ operationId: string }>('models:download', { modelId, operationId }),
   cancelDownload: (operationId: string) =>
     invoke<boolean>('models:cancelDownload', { operationId }),
+  /** Delete a downloaded local speech model's files (refused while a download runs). */
+  removeModel: (modelId: string) => invoke<{ removed: boolean }>('models:remove', { modelId }),
 
   armCapture: (sessionId: string) => invoke<{ expiresAt: number }>('capture:arm', { sessionId }),
   submitSession: (sessionId: string, wav: ArrayBuffer, options: SessionOptions, encodeMs: number) =>

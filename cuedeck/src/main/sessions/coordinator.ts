@@ -46,7 +46,12 @@ export interface CoordinatorDeps {
   ) => Promise<void>;
   emit: (event: SessionEvent) => void;
   recordError: (code: string, message: string) => void;
+  /** Clock for the duplicate-warmup window; defaults to `Date.now`. */
+  now?: () => number;
 }
+
+/** A submit-time LLM warmup is skipped if the same model was warmed this recently. */
+const LLM_WARMUP_REUSE_MS = 60_000;
 
 type CoordinatorSettings = Awaited<ReturnType<CoordinatorDeps['getSettings']>>;
 
@@ -67,8 +72,32 @@ interface SessionContext {
  */
 export class SessionCoordinator {
   private active: SessionContext | null = null;
+  /** Last LLM warmup started (prewarm or submit), to skip redundant ones. */
+  private lastLlmWarmup: { providerId: string; modelId: string; at: number } | null = null;
 
   constructor(private readonly deps: CoordinatorDeps) {}
+
+  private now(): number {
+    return (this.deps.now ?? Date.now)();
+  }
+
+  private noteLlmWarmup(settings: CoordinatorSettings): void {
+    this.lastLlmWarmup = {
+      providerId: settings.llmProviderId,
+      modelId: settings.llmModelId,
+      at: this.now(),
+    };
+  }
+
+  private recentlyWarmed(settings: CoordinatorSettings): boolean {
+    const last = this.lastLlmWarmup;
+    return (
+      last !== null &&
+      last.providerId === settings.llmProviderId &&
+      last.modelId === settings.llmModelId &&
+      this.now() - last.at < LLM_WARMUP_REUSE_MS
+    );
+  }
 
   private retire(): void {
     if (this.active) {
@@ -136,10 +165,12 @@ export class SessionCoordinator {
     const jobs: Promise<void>[] = [];
     try {
       const llm = this.deps.registry.getLlm(settings.llmProviderId);
-      if (llm.warmup)
+      if (llm.warmup) {
+        this.noteLlmWarmup(settings);
         jobs.push(
           llm.warmup(settings.llmModelId, AbortSignal.timeout(TIMEOUTS.warmup)).catch(() => {}),
         );
+      }
     } catch {
       // Unknown provider IDs fail the session later with a precise error.
     }
@@ -238,11 +269,16 @@ export class SessionCoordinator {
    * (local model load / cloud TLS setup overlaps STT instead of adding to
    * first-token latency). Best-effort by contract: any failure surfaces
    * later through the real generate call, with its proper error mapping.
+   * Skipped when the same provider and model were warmed (by `prewarm` at
+   * capture arm, or a previous submit) within the last minute: for cloud
+   * providers each warmup is an authenticated request against rate limits.
    */
   private warmupLlm(context: SessionContext, settings: CoordinatorSettings): void {
     try {
       const llm = this.deps.registry.getLlm(settings.llmProviderId);
       if (!llm.warmup) return;
+      if (this.recentlyWarmed(settings)) return;
+      this.noteLlmWarmup(settings);
       const signal = AbortSignal.any([
         context.controller.signal,
         AbortSignal.timeout(TIMEOUTS.warmup),

@@ -38,19 +38,37 @@ machine) is refused before a network connection opens.
 - **Model downloads you initiate** — fetching a Whisper model contacts Hugging Face
   (`huggingface.co`, `cdn-lfs.huggingface.co`, `cdn-lfs-us-1.huggingface.co`,
   `cas-bridge.xethub.hf.co`). Only the download request goes out; none of your content is sent.
+  Downloads happen only from the explicit **Download** action; warming up or transcribing with
+  a model that is not on disk fails with "model not installed" instead of downloading. A
+  downloaded model can be deleted again from Preferences → Providers.
 
 **Cloud providers are optional and opt-in.** Each is labeled _free tier; limits may change_
 and shows its data-use disclosure and privacy-policy link before you enable it. When selected:
 
 - **Cloud speech-to-text** (`api.groq.com` or `generativelanguage.googleapis.com`) receives the
   current audio clip, your language setting, and the model ID — nothing else.
-- **Cloud text generation** (`api.groq.com`, `generativelanguage.googleapis.com`, or
+- **Cloud text generation** (`api.groq.com`, `api.cerebras.ai`, `generativelanguage.googleapis.com`, or
   `openrouter.ai`) receives the current transcript, your active profile (summary, role
   context, emphasis notes), your session notes, and the answer-mode instructions.
 - Your API key for that provider is sent in a request header, as required to authenticate.
 
-Never sent: history, inactive profiles, screen contents, keystrokes, or anything while you are
-not in an active session. The app never falls back from local to cloud silently — the provider
+**Requests outside a session.** A few requests carry no session content at all:
+
+- **Readiness checks** (at startup, when settings or keys change, and from **Check again** /
+  **Test** buttons) ask the selected provider for its model list or status — for cloud
+  providers an authenticated metadata request (e.g. `GET /models` with your API key), for Ollama
+  a request to its local `/api/tags`.
+- **Warmups** (at startup after onboarding, and when you press Listen) prepare the selected
+  response model: an authenticated model-list/metadata request for cloud providers, and an empty
+  chat request (`messages: []`) to local Ollama that loads the model into memory. A submit-time
+  warmup is skipped if the same model was warmed within the last minute. The local speech model
+  is loaded from disk only.
+
+These requests contain the model ID and, for cloud providers, your API key for
+authentication. They never contain audio, a transcript, a profile, notes, or history.
+
+Never sent: history, inactive profiles, screen contents, keystrokes, and no audio, transcript,
+or profile content while you are not in an active session. The app never falls back from local to cloud silently — the provider
 you picked is the provider that runs. Gemini free-tier note: per Google's published pricing
 terms, free-tier content may be used to improve Google products. OpenRouter free models route
 to third-party hosts chosen by OpenRouter.
