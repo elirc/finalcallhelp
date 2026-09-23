@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -58,5 +58,28 @@ describe('WindowStateStore', () => {
     expect(await new WindowStateStore(dir).loadCoachBounds()).toBeNull();
     writeFileSync(file, JSON.stringify({ version: 1, coach: null }));
     expect(await new WindowStateStore(dir).loadCoachBounds()).toBeNull();
+  });
+
+  it('flushSync writes the bounds before returning and cancels the debounced write', async () => {
+    const store = new WindowStateStore(dir);
+    const file = path.join(dir, 'window-state.json');
+    store.rememberCoachBounds({ x: 5, y: 6, width: 710, height: 410 });
+    store.flushSync();
+    expect(JSON.parse(readFileSync(file, 'utf8')).coach).toEqual({
+      x: 5,
+      y: 6,
+      width: 710,
+      height: 410,
+    });
+    // Replace the file with a marker: a second (debounced) write would overwrite it.
+    writeFileSync(file, 'marker');
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(readFileSync(file, 'utf8')).toBe('marker');
+    expect(readdirSync(dir).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('flushSync with nothing remembered writes nothing', () => {
+    new WindowStateStore(dir).flushSync();
+    expect(readdirSync(dir)).toEqual([]);
   });
 });

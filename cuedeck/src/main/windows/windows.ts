@@ -1,7 +1,7 @@
 import { BrowserWindow, screen } from 'electron';
 import path from 'node:path';
 import type { PreferencesSection } from '../../shared/domain';
-import { hardenWebContents } from '../security/windowSecurity';
+import { hardenWebContents, rendererName, setTrustedDevOrigin } from '../security/windowSecurity';
 import { COACH_MIN_SIZE, eyeLinePlacement, isMostlyVisible, type Rect } from './placement';
 
 /**
@@ -12,16 +12,18 @@ import { COACH_MIN_SIZE, eyeLinePlacement, isMostlyVisible, type Rect } from './
  */
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
-declare const MAIN_WINDOW_VITE_NAME: string | undefined;
-
 function rendererEntry(): { devUrl?: string; file?: string } {
   const devUrl =
     typeof MAIN_WINDOW_VITE_DEV_SERVER_URL !== 'undefined'
       ? MAIN_WINDOW_VITE_DEV_SERVER_URL
       : undefined;
-  if (devUrl) return { devUrl };
-  const name = typeof MAIN_WINDOW_VITE_NAME !== 'undefined' ? MAIN_WINDOW_VITE_NAME : 'main_window';
-  return { file: path.join(__dirname, `../renderer/${name}/index.html`) };
+  if (devUrl) {
+    // Trust exactly this origin, not every localhost port.
+    setTrustedDevOrigin(new URL(devUrl).origin);
+    return { devUrl };
+  }
+  // Must match rendererEntrySuffix() in windowSecurity.ts.
+  return { file: path.join(__dirname, `../renderer/${rendererName()}/index.html`) };
 }
 
 const SECURE_PREFERENCES = {

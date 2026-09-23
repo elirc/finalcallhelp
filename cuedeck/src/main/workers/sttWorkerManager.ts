@@ -64,6 +64,7 @@ export class SttWorkerManager {
   constructor(
     private readonly workerPath: string,
     private readonly modelsDir: string,
+    private readonly reportCorrupt?: (file: string, quarantinePath: string) => void,
   ) {}
 
   get manifestPath(): string {
@@ -71,7 +72,9 @@ export class SttWorkerManager {
   }
 
   async readManifest(): Promise<Manifest> {
-    const raw = (await readJsonFile(this.manifestPath).catch(() => null)) as Manifest | null;
+    const raw = (await readJsonFile(this.manifestPath, {
+      onCorrupt: (q) => this.reportCorrupt?.('models/manifest.json', q),
+    }).catch(() => null)) as Manifest | null;
     if (!raw || raw.version !== 1 || !Array.isArray(raw.models)) return { version: 1, models: [] };
     return raw;
   }

@@ -43,6 +43,23 @@ lists a contact). Please do not include credentials or personal transcripts in r
 | Electron fuses: RunAsNode off, `NODE_OPTIONS` off, Node CLI inspect arguments off, cookie encryption on, ASAR integrity validation on, only-load-app-from-ASAR on                                                                | `forge.config.ts`                                           | packaged build                              |
 | Structured public errors; no stack traces or provider response bodies reach the UI                                                                                                                                               | `src/shared/errors.ts`                                      | integration                                 |
 
+## App origin, capture grants, and unreadable data
+
+**Exact app origin.** A page counts as the app (for IPC, navigation and permissions) only when it
+is the renderer entry file itself (`…/renderer/main_window/index.html`, any `#/` route) or, in
+development, the exact Vite dev-server origin. Other `file:` documents and other localhost ports
+are untrusted. Unpackaged builds started without a dev server still accept loopback pages so the
+E2E suite can run; packaged builds never do (`src/main/security/urlPolicy.ts`).
+
+**Grant ownership.** `capture:arm` records the id of the WebContents that armed the grant, and the
+display-media handler consumes it only for a request from that same WebContents. A request from
+any other WebContents is denied and clears the grant (`src/main/security/captureGrant.ts`).
+
+**Quarantine.** A settings, secrets, history, profiles, window-state or model-manifest file that
+is not valid JSON is renamed to `<name>.corrupt-<time>.json` next to the original, recorded in
+diagnostics, and the app starts from empty data. The original bytes are never overwritten. A
+settings file written by a newer CueDeck is used read-only for that run instead of being replaced.
+
 ## Dependency policy
 
 - Pin via `package-lock.json`; use currently supported stable Electron.

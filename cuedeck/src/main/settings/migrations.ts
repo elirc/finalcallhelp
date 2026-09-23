@@ -11,6 +11,7 @@ import {
 /**
  * Settings migrations. Each entry upgrades from its index version to the
  * next; unknown/corrupt data falls back to defaults rather than crashing.
+ * Data from a newer schema is kept when it validates (see loadSettingsData).
  */
 type Migration = (raw: Record<string, unknown>) => Record<string, unknown>;
 
@@ -23,22 +24,49 @@ const MIGRATIONS: Record<number, Migration> = {
 };
 
 export function migrateSettings(raw: unknown): PublicSettings {
-  if (raw === null || typeof raw !== 'object') return { ...DEFAULT_SETTINGS };
+  return loadSettingsData(raw).settings;
+}
+
+/**
+ * How stored settings were interpreted:
+ * - `ok`: current or older data, migrated (invalid data falls back to defaults);
+ * - `newer-version`: written by a newer build but valid for this one; use it,
+ *   but the caller must not write it back (it would drop the newer fields);
+ * - `newer-invalid`: written by a newer build and not usable here; the caller
+ *   should move the file aside before starting from defaults.
+ */
+export type SettingsLoadStatus = 'ok' | 'newer-version' | 'newer-invalid';
+
+export function loadSettingsData(raw: unknown): {
+  settings: PublicSettings;
+  status: SettingsLoadStatus;
+} {
+  if (raw === null || typeof raw !== 'object')
+    return { settings: { ...DEFAULT_SETTINGS }, status: 'ok' };
   let data = { ...(raw as Record<string, unknown>) };
   let version = typeof data.schemaVersion === 'number' ? data.schemaVersion : 0;
   if (version > CURRENT_SCHEMA_VERSION) {
-    // Data written by a newer app version; start clean rather than guess.
-    return { ...DEFAULT_SETTINGS };
+    // Written by a newer app version. Keep what this build understands
+    // (unknown fields drop) and let the store run read-only.
+    const parsed = publicSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, ...data });
+    if (!parsed.success) return { settings: { ...DEFAULT_SETTINGS }, status: 'newer-invalid' };
+    return {
+      settings: normalizeProviders({ ...parsed.data, schemaVersion: CURRENT_SCHEMA_VERSION }),
+      status: 'newer-version',
+    };
   }
   while (version < CURRENT_SCHEMA_VERSION) {
     const migrate = MIGRATIONS[version];
-    if (!migrate) return { ...DEFAULT_SETTINGS };
+    if (!migrate) return { settings: { ...DEFAULT_SETTINGS }, status: 'ok' };
     data = migrate(data);
     version = typeof data.schemaVersion === 'number' ? data.schemaVersion : version + 1;
   }
   const parsed = publicSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, ...data });
-  if (!parsed.success) return { ...DEFAULT_SETTINGS };
-  const settings = parsed.data;
+  if (!parsed.success) return { settings: { ...DEFAULT_SETTINGS }, status: 'ok' };
+  return { settings: normalizeProviders(parsed.data), status: 'ok' };
+}
+
+function normalizeProviders(settings: PublicSettings): PublicSettings {
   if (PROVIDERS[settings.sttProviderId]?.kind !== 'stt') settings.sttProviderId = 'local-whisper';
   if (PROVIDERS[settings.llmProviderId]?.kind !== 'llm') settings.llmProviderId = 'ollama';
   if (settings.sttProviderId === 'local-whisper') {

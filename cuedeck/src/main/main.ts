@@ -1,4 +1,12 @@
-import { app, BrowserWindow, desktopCapturer, Menu, safeStorage, session } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  desktopCapturer,
+  Menu,
+  safeStorage,
+  session,
+  webContents,
+} from 'electron';
 import os from 'node:os';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
@@ -48,10 +56,6 @@ if (process.env.CUEDECK_USER_DATA) {
   app.setPath('userData', process.env.CUEDECK_USER_DATA);
 }
 
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
-}
-
 let coachWindow: BrowserWindow | null = null;
 let preferencesWindow: BrowserWindow | null = null;
 /** Set once the app or the coach window is going away, so the preferences
@@ -75,13 +79,51 @@ async function bootstrap(): Promise<void> {
   const userData = app.getPath('userData');
   const modelsDir = path.join(userData, 'models');
 
-  const settings = new PublicSettingsStore(userData);
-  const secrets = new SecretVault(userData, safeStorage);
-  const history = new HistoryStore(userData);
-  const profiles = new ProfileStore(userData);
-  const windowState = new WindowStateStore(userData);
+  // Created first so the stores can report quarantined files. Its
+  // settings and worker lookups are closures that only run later.
+  const diagnostics = new Diagnostics(
+    app.getVersion(),
+    async () => {
+      const s = await settings.get();
+      return { stt: s.sttProviderId, llm: s.llmProviderId };
+    },
+    () => {
+      const status = sttWorkers.getStatus();
+      return status.modelId ? `${status.state} (${status.modelId})` : status.state;
+    },
+  );
+  const reportCorrupt = (file: string, q: string) =>
+    diagnostics.recordError('STORAGE_FAILED', `quarantined ${file} as ${path.basename(q)}`);
+
+  const settings = new PublicSettingsStore(userData, reportCorrupt);
+  const secrets = new SecretVault(userData, safeStorage, reportCorrupt);
+  const history = new HistoryStore(userData, reportCorrupt);
+  const profiles = new ProfileStore(userData, reportCorrupt);
+  const windowState = new WindowStateStore(userData, reportCorrupt);
   const captureGrant = new CaptureGrant();
-  const sttWorkers = new SttWorkerManager(path.join(__dirname, 'sttWorker.js'), modelsDir);
+  const sttWorkers = new SttWorkerManager(
+    path.join(__dirname, 'sttWorker.js'),
+    modelsDir,
+    reportCorrupt,
+  );
+
+  await settings.get();
+  if (settings.readOnlyReason === 'newer-version') {
+    diagnostics.recordError(
+      'STORAGE_FAILED',
+      'settings.json was written by a newer CueDeck; changes will not be saved',
+    );
+  }
+  // A quarantined (or missing) vault leaves `configured` flags pointing at
+  // keys that are gone; clear them once so the UI asks for the key again.
+  try {
+    const stored = new Set(await secrets.listProviderIds());
+    for (const [id, flag] of Object.entries((await settings.get()).credentials)) {
+      if (flag.configured && !stored.has(id)) await settings.setCredentialFlag(id, false);
+    }
+  } catch {
+    // The vault could not be read at all; leave the flags for the next run.
+  }
 
   const registry = new ProviderRegistry();
   const keyFor = (providerId: string) => () => secrets.getForAdapter(providerId);
@@ -96,18 +138,6 @@ async function bootstrap(): Promise<void> {
   registry.registerLlm(new GeminiLlmProvider(keyFor('gemini')));
   registry.registerLlm(new OpenRouterProvider(keyFor('openrouter')));
   registry.registerLlm(new DemoLlmProvider());
-
-  const diagnostics = new Diagnostics(
-    app.getVersion(),
-    async () => {
-      const s = await settings.get();
-      return { stt: s.sttProviderId, llm: s.llmProviderId };
-    },
-    () => {
-      const status = sttWorkers.getStatus();
-      return status.modelId ? `${status.state} (${status.modelId})` : status.state;
-    },
-  );
 
   const coordinator = new SessionCoordinator({
     registry,
@@ -191,7 +221,9 @@ async function bootstrap(): Promise<void> {
   // the TTL is denied.
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     const frameUrl = request.frame?.url ?? '';
-    if (!isTrustedAppUrl(frameUrl) || !captureGrant.consume()) {
+    // Only the WebContents that armed the grant may use it.
+    const requesterId = request.frame ? webContents.fromFrame(request.frame)?.id : undefined;
+    if (!isTrustedAppUrl(frameUrl) || !captureGrant.consume(requesterId)) {
       callback({});
       return;
     }
@@ -226,7 +258,8 @@ async function bootstrap(): Promise<void> {
   win.on('resize', remember);
   win.on('close', () => {
     shuttingDown = true;
-    void windowState.flush();
+    // Synchronous: window-all-closed quits without waiting for async work.
+    windowState.flushSync();
   });
   win.on('closed', () => {
     coachWindow = null;
@@ -239,30 +272,31 @@ async function bootstrap(): Promise<void> {
   });
 }
 
-app.on('second-instance', () => {
-  if (coachWindow && !coachWindow.isDestroyed()) {
-    if (coachWindow.isMinimized()) coachWindow.restore();
-    coachWindow.focus();
-  }
-});
-
-app.whenReady().then(bootstrap);
-
-app.on('before-quit', () => {
-  shuttingDown = true;
-});
-
-app.on('window-all-closed', () => {
+if (!app.requestSingleInstanceLock()) {
+  // Another CueDeck is running; it focuses its window on 'second-instance'.
   app.quit();
-});
+} else {
+  app.on('second-instance', () => {
+    if (coachWindow && !coachWindow.isDestroyed()) {
+      if (coachWindow.isMinimized()) coachWindow.restore();
+      coachWindow.focus();
+    }
+  });
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    shuttingDown = false;
-    void bootstrap();
-  }
-});
+  app.whenReady().then(bootstrap);
 
-app.on('web-contents-created', (_event, contents) => {
-  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
-});
+  app.on('before-quit', () => {
+    shuttingDown = true;
+  });
+
+  // The app quits when its last window closes on every platform, so there
+  // is no macOS-style 'activate' re-open: re-running bootstrap() would
+  // re-register every IPC handler and throw.
+  app.on('window-all-closed', () => {
+    app.quit();
+  });
+
+  app.on('web-contents-created', (_event, contents) => {
+    contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  });
+}

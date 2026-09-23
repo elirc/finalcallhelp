@@ -8,7 +8,10 @@ export class ProfileStore {
   private readonly filePath: string;
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(userDataDir: string) {
+  constructor(
+    userDataDir: string,
+    private readonly reportCorrupt?: (file: string, quarantinePath: string) => void,
+  ) {
     this.filePath = path.join(userDataDir, 'profiles.json');
   }
 
@@ -20,7 +23,9 @@ export class ProfileStore {
   }
 
   async list(): Promise<Profile[]> {
-    const raw = await readJsonFile(this.filePath).catch(() => null);
+    const raw = await readJsonFile(this.filePath, {
+      onCorrupt: (q) => this.reportCorrupt?.('profiles.json', q),
+    }).catch(() => null);
     if (!Array.isArray(raw)) return [];
     const out: Profile[] = [];
     for (const entry of raw) {

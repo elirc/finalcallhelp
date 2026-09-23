@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { migrateSettings } from '../../src/main/settings/migrations';
 import { PublicSettingsStore } from '../../src/main/settings/publicStore';
 import { SecretVault, type SafeStorageLike } from '../../src/main/settings/secretVault';
@@ -250,5 +250,110 @@ describe('ProfileStore', () => {
     expect((await store.list())[0].name).toBe('P1 renamed');
     await store.delete(created.id);
     expect(await store.list()).toEqual([]);
+  });
+});
+
+describe('store quarantine (unreadable files are kept, not overwritten)', () => {
+  const corruptFiles = () => readdirSync(dir).filter((f) => /\.corrupt-.*\.json$/.test(f));
+
+  const cases: {
+    file: string;
+    load: (report: (file: string, q: string) => void) => Promise<unknown>;
+    empty: unknown;
+  }[] = [
+    {
+      file: 'settings.json',
+      load: (report) => new PublicSettingsStore(dir, report).get(),
+      empty: DEFAULT_SETTINGS,
+    },
+    {
+      file: 'history.json',
+      load: (report) => new HistoryStore(dir, report).list(10, 7),
+      empty: [],
+    },
+    { file: 'profiles.json', load: (report) => new ProfileStore(dir, report).list(), empty: [] },
+    {
+      file: 'secrets.json',
+      load: (report) => new SecretVault(dir, fakeSafeStorage, report).listProviderIds(),
+      empty: [],
+    },
+  ];
+
+  for (const c of cases) {
+    it(`moves a corrupt ${c.file} aside and starts empty`, async () => {
+      await writeFile(path.join(dir, c.file), '{not json');
+      const report = vi.fn();
+      expect(await c.load(report)).toEqual(c.empty);
+      const quarantined = corruptFiles();
+      expect(quarantined).toHaveLength(1);
+      expect(quarantined[0].startsWith(c.file.replace(/\.json$/, '.corrupt-'))).toBe(true);
+      expect(await readFile(path.join(dir, quarantined[0]), 'utf8')).toBe('{not json');
+      expect(report).toHaveBeenCalledTimes(1);
+      expect(report).toHaveBeenCalledWith(c.file, path.join(dir, quarantined[0]));
+    });
+  }
+
+  it('a normal first run creates no quarantine file and reports nothing', async () => {
+    const report = vi.fn();
+    const settings = new PublicSettingsStore(dir, report);
+    await settings.get();
+    await settings.patch({ alwaysOnTop: true });
+    await new HistoryStore(dir, report).list(10, 7);
+    await new ProfileStore(dir, report).list();
+    const vault = new SecretVault(dir, fakeSafeStorage, report);
+    await vault.set('groq', 'k');
+    await vault.has('groq');
+    expect(corruptFiles()).toEqual([]);
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it('keeps newer-version settings and never writes over them', async () => {
+    const file = path.join(dir, 'settings.json');
+    const original = JSON.stringify({
+      ...DEFAULT_SETTINGS,
+      schemaVersion: 99,
+      alwaysOnTop: true,
+      fontScale: 1.3,
+      someFutureField: 'kept on disk',
+    });
+    await writeFile(file, original);
+    const report = vi.fn();
+    const store = new PublicSettingsStore(dir, report);
+    const loaded = await store.get();
+    expect(loaded.alwaysOnTop).toBe(true);
+    expect(loaded.fontScale).toBe(1.3);
+    expect(store.readOnlyReason).toBe('newer-version');
+    const patched = await store.patch({ compactMode: true });
+    expect(patched.compactMode).toBe(true);
+    expect((await store.get()).compactMode).toBe(true);
+    await store.setCredentialFlag('groq', true);
+    expect(await readFile(file, 'utf8')).toBe(original);
+    expect(corruptFiles()).toEqual([]);
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it('quarantines newer-version settings that do not validate', async () => {
+    await writeFile(
+      path.join(dir, 'settings.json'),
+      JSON.stringify({ schemaVersion: 99, fontScale: 'huge' }),
+    );
+    const report = vi.fn();
+    const store = new PublicSettingsStore(dir, report);
+    expect(await store.get()).toEqual(DEFAULT_SETTINGS);
+    expect(store.readOnlyReason).toBeNull();
+    expect(corruptFiles()).toHaveLength(1);
+    expect(report).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SecretVault.listProviderIds', () => {
+  it('lists the ids of stored credentials only', async () => {
+    const vault = new SecretVault(dir, fakeSafeStorage);
+    expect(await vault.listProviderIds()).toEqual([]);
+    await vault.set('groq', 'a');
+    await vault.set('gemini', 'b');
+    expect((await vault.listProviderIds()).sort()).toEqual(['gemini', 'groq']);
+    await vault.remove('groq');
+    expect(await vault.listProviderIds()).toEqual(['gemini']);
   });
 });

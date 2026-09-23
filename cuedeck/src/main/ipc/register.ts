@@ -268,12 +268,12 @@ export function registerIpc(services: AppServices): void {
 
   // ---- capture ---------------------------------------------------------------
 
-  secureHandle('capture:arm', (_event, raw) => {
+  secureHandle('capture:arm', (event, raw) => {
     const { sessionId } = captureArmSchema.parse(raw);
     // Warm the speech and response models while the clip is still being
     // recorded so neither cold start lands on the time-to-answer path.
     void services.coordinator.prewarm();
-    return services.captureGrant.arm(sessionId);
+    return services.captureGrant.arm(sessionId, event.sender.id);
   });
 
   // ---- session ---------------------------------------------------------------

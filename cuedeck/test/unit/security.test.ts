@@ -65,6 +65,28 @@ describe('CaptureGrant', () => {
     grant.disarm();
     expect(grant.isArmed()).toBe(false);
   });
+
+  it('a different requester cannot consume a grant, and the attempt clears it', () => {
+    const grant = new CaptureGrant();
+    grant.arm('session-1', 7);
+    expect(grant.consume(8)).toBe(false);
+    expect(grant.isArmed()).toBe(false);
+    expect(grant.consume(7)).toBe(false);
+    grant.arm('session-2', 7);
+    expect(grant.consume(undefined)).toBe(false);
+  });
+
+  it('the arming WebContents consumes its own grant', () => {
+    const grant = new CaptureGrant();
+    grant.arm('session-1', 7);
+    expect(grant.consume(7)).toBe(true);
+  });
+
+  it('without a recorded owner any requester may consume', () => {
+    const grant = new CaptureGrant();
+    grant.arm('session-1');
+    expect(grant.consume(42)).toBe(true);
+  });
 });
 
 describe('outbound host allowlist', () => {

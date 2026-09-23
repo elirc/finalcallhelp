@@ -27,12 +27,17 @@ export class SecretVault {
   constructor(
     userDataDir: string,
     private readonly safeStorage: SafeStorageLike,
+    private readonly reportCorrupt?: (file: string, quarantinePath: string) => void,
   ) {
     this.filePath = path.join(userDataDir, 'secrets.json');
   }
 
   private async read(): Promise<VaultFile> {
-    const raw = (await readJsonFile(this.filePath)) as VaultFile | null;
+    // An unreadable vault is quarantined and reads as empty, so one bad
+    // file cannot make every cloud call fail until the user deletes it.
+    const raw = (await readJsonFile(this.filePath, {
+      onCorrupt: (q) => this.reportCorrupt?.('secrets.json', q),
+    })) as VaultFile | null;
     if (!raw || raw.version !== 1 || typeof raw.entries !== 'object') {
       return { version: 1, entries: {} };
     }
@@ -71,6 +76,12 @@ export class SecretVault {
   async has(providerId: string): Promise<boolean> {
     const vault = await this.read();
     return providerId in vault.entries;
+  }
+
+  /** Provider ids with a stored credential (ids only, never values). */
+  async listProviderIds(): Promise<string[]> {
+    const vault = await this.read();
+    return Object.keys(vault.entries);
   }
 
   /** Only provider adapters (main process) may call this. */

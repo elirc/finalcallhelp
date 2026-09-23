@@ -1,5 +1,5 @@
 import { app, shell, session, type BrowserWindow, type WebContents } from 'electron';
-import { isAllowedExternalUrl } from './urlPolicy';
+import { isAllowedExternalUrl, isTrustedAppUrlPure } from './urlPolicy';
 
 export { isAllowedExternalUrl } from './urlPolicy';
 
@@ -9,21 +9,33 @@ export { isAllowedExternalUrl } from './urlPolicy';
  * and openExternal only accepts parsed HTTPS URLs from a fixed allowlist.
  */
 
+declare const MAIN_WINDOW_VITE_NAME: string | undefined;
+
+/** Folder name of the renderer bundle (Forge's Vite plugin sets it at build time). */
+export function rendererName(): string {
+  return typeof MAIN_WINDOW_VITE_NAME !== 'undefined' ? MAIN_WINDOW_VITE_NAME : 'main_window';
+}
+
+/** Path suffix of the packaged renderer entry file; windows.ts loads the same file. */
+export function rendererEntrySuffix(): string {
+  return `/renderer/${rendererName()}/index.html`;
+}
+
+let trustedDevOrigin: string | undefined;
+
+/** Called by windows.ts with the exact Vite dev-server origin when there is one. */
+export function setTrustedDevOrigin(origin: string | undefined): void {
+  trustedDevOrigin = origin;
+}
+
 export function isTrustedAppUrl(rawUrl: string): boolean {
-  try {
-    const url = new URL(rawUrl);
-    if (url.protocol === 'file:') return true;
-    if (
-      url.protocol === 'http:' &&
-      (url.hostname === 'localhost' || url.hostname === '127.0.0.1')
-    ) {
-      // Vite dev server during development only.
-      return !app.isPackaged;
-    }
-    return false;
-  } catch {
-    return false;
-  }
+  return isTrustedAppUrlPure(rawUrl, {
+    entryPathSuffix: rendererEntrySuffix(),
+    devOrigin: trustedDevOrigin,
+    // Unpackaged runs without a known dev server (e.g. tests of a built
+    // bundle) keep the old loopback allowance; packaged builds never do.
+    allowAnyLocalhost: !app.isPackaged && trustedDevOrigin === undefined,
+  });
 }
 
 export function isTrustedSender(contents: WebContents | undefined | null): boolean {

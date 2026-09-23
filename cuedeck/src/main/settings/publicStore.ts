@@ -1,8 +1,8 @@
 import path from 'node:path';
 import type { PublicSettings } from '../../shared/domain';
 import { publicSettingsPatchSchema } from '../../shared/schemas';
-import { readJsonFile, writeJsonFile } from '../storage/jsonFile';
-import { migrateSettings } from './migrations';
+import { quarantineFile, readJsonFile, writeJsonFile } from '../storage/jsonFile';
+import { loadSettingsData } from './migrations';
 import { DEFAULT_PROVIDER_MODELS } from '../../shared/catalog';
 import { validateProviderSettings } from './providerSettings';
 
@@ -15,17 +15,35 @@ export class PublicSettingsStore {
   private cache: PublicSettings | null = null;
   private loading: Promise<PublicSettings> | null = null;
   private writeChain: Promise<unknown> = Promise.resolve();
+  private readOnly: 'newer-version' | null = null;
 
-  constructor(userDataDir: string) {
+  constructor(
+    userDataDir: string,
+    private readonly reportCorrupt?: (file: string, quarantinePath: string) => void,
+  ) {
     this.filePath = path.join(userDataDir, 'settings.json');
+  }
+
+  /**
+   * Set when settings.json was written by a newer CueDeck: changes still
+   * apply in memory for this run but are never written back, so the newer
+   * build's file (and any fields this build does not know) survives.
+   */
+  get readOnlyReason(): 'newer-version' | null {
+    return this.readOnly;
   }
 
   async load(): Promise<PublicSettings> {
     if (this.cache) return this.cache;
-    this.loading ??= readJsonFile(this.filePath)
+    const onCorrupt = (q: string) => this.reportCorrupt?.('settings.json', q);
+    this.loading ??= readJsonFile(this.filePath, { onCorrupt })
       .catch(() => null)
-      .then((raw) => {
-        this.cache = migrateSettings(raw);
+      .then(async (raw) => {
+        const { settings, status } = loadSettingsData(raw);
+        if (status === 'newer-version') this.readOnly = 'newer-version';
+        if (status === 'newer-invalid')
+          await quarantineFile(this.filePath, onCorrupt).catch(() => undefined);
+        this.cache = settings;
         return this.cache;
       });
     return this.loading;
@@ -59,7 +77,7 @@ export class PublicSettingsStore {
       .catch(() => undefined)
       .then(async () => {
         const next = update(await this.load());
-        await writeJsonFile(this.filePath, next);
+        if (!this.readOnly) await writeJsonFile(this.filePath, next);
         this.cache = next;
         return next;
       });

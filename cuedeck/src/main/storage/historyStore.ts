@@ -9,7 +9,10 @@ export class HistoryStore {
   private readonly filePath: string;
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(userDataDir: string) {
+  constructor(
+    userDataDir: string,
+    private readonly reportCorrupt?: (file: string, quarantinePath: string) => void,
+  ) {
     this.filePath = path.join(userDataDir, 'history.json');
   }
 
@@ -25,7 +28,9 @@ export class HistoryStore {
   }
 
   private async read(): Promise<HistoryItem[]> {
-    const raw = await readJsonFile(this.filePath).catch(() => null);
+    const raw = await readJsonFile(this.filePath, {
+      onCorrupt: (q) => this.reportCorrupt?.('history.json', q),
+    }).catch(() => null);
     if (!Array.isArray(raw)) return [];
     const items: HistoryItem[] = [];
     for (const entry of raw) {

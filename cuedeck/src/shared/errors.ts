@@ -71,7 +71,7 @@ const TEMPLATES: Record<PublicErrorCode, ErrorTemplate> = {
     retryable: true,
   },
   STORAGE_FAILED: {
-    message: 'Saving data to disk failed.',
+    message: 'Reading or saving app data failed.',
     retryable: true,
     action: 'open-diagnostics',
   },
